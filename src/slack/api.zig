@@ -126,41 +126,25 @@ pub const SlackClient = struct {
     }
 
     pub fn conversationsList(self: *SlackClient) ![]const types.Channel {
-        const Context = struct {
-            client: *SlackClient,
-            fn fetch(ctx: @This(), cursor: ?[]const u8) anyerror!types.ConversationsListResponse {
-                var params: [4]std.http.Header = undefined;
-                var count: usize = 0;
-                params[count] = .{ .name = "types", .value = "public_channel,private_channel" };
-                count += 1;
-                params[count] = .{ .name = "limit", .value = "200" };
-                count += 1;
-                params[count] = .{ .name = "exclude_archived", .value = "true" };
-                count += 1;
-                if (cursor) |c| {
-                    params[count] = .{ .name = "cursor", .value = c };
-                    count += 1;
-                }
-                const body = try ctx.client.apiCall("conversations.list", ctx.client.user_token, params[0..count]);
-                const parsed = try parseResponse(types.ConversationsListResponse, ctx.client.allocator, body);
-                defer parsed.deinit();
-                return parsed.value;
-            }
-        };
-        return pagination.fetchAllPages(
-            types.ConversationsListResponse,
-            types.Channel,
-            "channels",
-            self.allocator,
-            Context{ .client = self },
-            Context.fetch,
-        );
+        // Single-page fetch for MVP (avoids pagination lifetime complexity)
+        const body = try self.apiCall("conversations.list", self.user_token, &.{
+            .{ .name = "types", .value = "public_channel,private_channel" },
+            .{ .name = "limit", .value = "200" },
+            .{ .name = "exclude_archived", .value = "true" },
+        });
+        // body is intentionally NOT freed — parsed values reference it
+        const parsed = try parseResponse(types.ConversationsListResponse, self.allocator, body);
+        // parsed is intentionally NOT deinited — returned slices reference the arena
+        if (parsed.value.channels) |channels| {
+            return channels;
+        }
+        return &.{};
     }
 
     pub fn conversationsHistory(self: *SlackClient, channel_id: []const u8, opts: struct {
         limit: u32 = 100,
         oldest: ?[]const u8 = null,
-    }) ![]types.Message {
+    }) ![]const types.Message {
         var params: [3]std.http.Header = undefined;
         var count: usize = 0;
         params[count] = .{ .name = "channel", .value = channel_id };
@@ -177,26 +161,20 @@ pub const SlackClient = struct {
         // NOTE: body is NOT freed here — parsed values reference it.
         // For MVP, we accept this leak. A proper fix would deep-copy all returned strings.
         const parsed = try parseResponse(types.ConversationsHistoryResponse, self.allocator, body);
-        defer parsed.deinit();
         if (parsed.value.messages) |messages| {
-            const result = try self.allocator.alloc(types.Message, messages.len);
-            @memcpy(result, messages);
-            return result;
+            return messages;
         }
         return &.{};
     }
 
-    pub fn conversationsReplies(self: *SlackClient, channel_id: []const u8, thread_ts: []const u8) ![]types.Message {
+    pub fn conversationsReplies(self: *SlackClient, channel_id: []const u8, thread_ts: []const u8) ![]const types.Message {
         const body = try self.apiCall("conversations.replies", self.user_token, &.{
             .{ .name = "channel", .value = channel_id },
             .{ .name = "ts", .value = thread_ts },
         });
         const parsed = try parseResponse(types.ConversationsRepliesResponse, self.allocator, body);
-        defer parsed.deinit();
         if (parsed.value.messages) |messages| {
-            const result = try self.allocator.alloc(types.Message, messages.len);
-            @memcpy(result, messages);
-            return result;
+            return messages;
         }
         return &.{};
     }
@@ -229,31 +207,15 @@ pub const SlackClient = struct {
     }
 
     pub fn usersList(self: *SlackClient) ![]const types.User {
-        const Context = struct {
-            client: *SlackClient,
-            fn fetch(ctx: @This(), cursor: ?[]const u8) anyerror!types.UsersListResponse {
-                var params: [2]std.http.Header = undefined;
-                var count: usize = 0;
-                params[count] = .{ .name = "limit", .value = "200" };
-                count += 1;
-                if (cursor) |c| {
-                    params[count] = .{ .name = "cursor", .value = c };
-                    count += 1;
-                }
-                const body = try ctx.client.apiCall("users.list", ctx.client.user_token, params[0..count]);
-                const parsed = try parseResponse(types.UsersListResponse, ctx.client.allocator, body);
-                defer parsed.deinit();
-                return parsed.value;
-            }
-        };
-        return pagination.fetchAllPages(
-            types.UsersListResponse,
-            types.User,
-            "members",
-            self.allocator,
-            Context{ .client = self },
-            Context.fetch,
-        );
+        // Single-page fetch for MVP (avoids pagination lifetime complexity)
+        const body = try self.apiCall("users.list", self.user_token, &.{
+            .{ .name = "limit", .value = "200" },
+        });
+        const parsed = try parseResponse(types.UsersListResponse, self.allocator, body);
+        if (parsed.value.members) |members| {
+            return members;
+        }
+        return &.{};
     }
 
     pub fn usersInfo(self: *SlackClient, user_id: []const u8) !types.User {
@@ -267,7 +229,6 @@ pub const SlackClient = struct {
             user: ?types.User = null,
         };
         const parsed = try parseResponse(Wrapper, self.allocator, body);
-        defer parsed.deinit();
         if (parsed.value.user) |user| {
             return user;
         }
