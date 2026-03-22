@@ -77,7 +77,7 @@ fn linkNativeDeps(b: *std.Build, step: *std.Build.Step.Compile) void {
     step.linkSystemLibrary("sqlite3");
     if (b.graph.host.result.os.tag == .macos) {
         step.addFrameworkPath(.{ .cwd_relative = "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/Frameworks" });
+        step.linkFramework("Security");
+        step.linkFramework("CoreFoundation");
     }
-    step.linkFramework("Security");
-    step.linkFramework("CoreFoundation");
 }
