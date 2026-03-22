@@ -90,6 +90,9 @@ pub const SlackClient = struct {
     user_token: []const u8,
     app_token: []const u8,
     http_client: std.http.Client,
+    // Track owned response bodies so they can be freed on deinit.
+    // Parsed JSON slices point into these bodies, so they must outlive the parsed values.
+    owned_bodies: std.ArrayListUnmanaged([]const u8) = .{},
 
     /// Initialize a new SlackClient.
     ///
@@ -106,7 +109,16 @@ pub const SlackClient = struct {
     }
 
     pub fn deinit(self: *SlackClient) void {
+        for (self.owned_bodies.items) |body| {
+            self.allocator.free(body);
+        }
+        self.owned_bodies.deinit(self.allocator);
         self.http_client.deinit();
+    }
+
+    /// Track a response body for cleanup on deinit.
+    fn trackBody(self: *SlackClient, body: []const u8) void {
+        self.owned_bodies.append(self.allocator, body) catch {};
     }
 
     // --- Public API methods ---
@@ -132,9 +144,23 @@ pub const SlackClient = struct {
             .{ .name = "limit", .value = "200" },
             .{ .name = "exclude_archived", .value = "true" },
         });
-        // body is intentionally NOT freed — parsed values reference it
+        self.trackBody(body);
         const parsed = try parseResponse(types.ConversationsListResponse, self.allocator, body);
-        // parsed is intentionally NOT deinited — returned slices reference the arena
+        if (parsed.value.channels) |channels| {
+            return channels;
+        }
+        return &.{};
+    }
+
+    /// Fetch DM (im) conversations separately.
+    /// Returns empty slice on scope error so it doesn't break channel listing.
+    pub fn conversationsListIm(self: *SlackClient) []const types.Channel {
+        const body = self.apiCall("conversations.list", self.user_token, &.{
+            .{ .name = "types", .value = "im" },
+            .{ .name = "limit", .value = "200" },
+        }) catch return &.{};
+        self.trackBody(body);
+        const parsed = parseResponse(types.ConversationsListResponse, self.allocator, body) catch return &.{};
         if (parsed.value.channels) |channels| {
             return channels;
         }
@@ -158,8 +184,7 @@ pub const SlackClient = struct {
             count += 1;
         }
         const body = try self.apiCall("conversations.history", self.user_token, params[0..count]);
-        // NOTE: body is NOT freed here — parsed values reference it.
-        // For MVP, we accept this leak. A proper fix would deep-copy all returned strings.
+        self.trackBody(body);
         const parsed = try parseResponse(types.ConversationsHistoryResponse, self.allocator, body);
         if (parsed.value.messages) |messages| {
             return messages;
@@ -172,6 +197,7 @@ pub const SlackClient = struct {
             .{ .name = "channel", .value = channel_id },
             .{ .name = "ts", .value = thread_ts },
         });
+        self.trackBody(body);
         const parsed = try parseResponse(types.ConversationsRepliesResponse, self.allocator, body);
         if (parsed.value.messages) |messages| {
             return messages;
@@ -211,6 +237,7 @@ pub const SlackClient = struct {
         const body = try self.apiCall("users.list", self.user_token, &.{
             .{ .name = "limit", .value = "200" },
         });
+        self.trackBody(body);
         const parsed = try parseResponse(types.UsersListResponse, self.allocator, body);
         if (parsed.value.members) |members| {
             return members;
@@ -222,6 +249,7 @@ pub const SlackClient = struct {
         const body = try self.apiCall("users.info", self.user_token, &.{
             .{ .name = "user", .value = user_id },
         });
+        self.trackBody(body);
 
         // users.info returns { ok: true, user: { ... } }
         const Wrapper = struct {
@@ -233,6 +261,139 @@ pub const SlackClient = struct {
             return user;
         }
         return error.SlackApiError;
+    }
+
+    /// Upload a file to the current channel.
+    /// Uses the 3-step flow: getUploadURLExternal → PUT → completeUploadExternal.
+    pub fn filesUpload(self: *SlackClient, channel_id: []const u8, file_path: []const u8) !void {
+        // Read file
+        const file = std.fs.cwd().openFile(file_path, .{}) catch return error.FileNotFound;
+        defer file.close();
+        const file_data = file.readToEndAlloc(self.allocator, 50 * 1024 * 1024) catch return error.FileReadFailed; // 50MB max
+        defer self.allocator.free(file_data);
+
+        // Extract filename from path
+        const filename = if (std.mem.lastIndexOfScalar(u8, file_path, '/')) |pos|
+            file_path[pos + 1 ..]
+        else
+            file_path;
+
+        // Step 1: Get upload URL
+        var len_buf: [16]u8 = undefined;
+        const len_str = std.fmt.bufPrint(&len_buf, "{d}", .{file_data.len}) catch return error.SlackApiError;
+        const body1 = try self.apiCall("files.getUploadURLExternal", self.user_token, &.{
+            .{ .name = "filename", .value = filename },
+            .{ .name = "length", .value = len_str },
+        });
+        defer self.allocator.free(body1);
+
+        {
+            const stderr = std.fs.File.stderr();
+            _ = stderr.write("[zlack] step1 response: ") catch {};
+            _ = stderr.write(body1[0..@min(body1.len, 500)]) catch {};
+            _ = stderr.write("\n") catch {};
+        }
+
+        const parsed1 = try parseResponse(types.GetUploadUrlResponse, self.allocator, body1);
+        defer parsed1.deinit();
+
+        const upload_url = parsed1.value.upload_url orelse return error.SlackApiError;
+        const file_id = parsed1.value.file_id orelse return error.SlackApiError;
+
+        {
+            const stderr = std.fs.File.stderr();
+            _ = stderr.write("[zlack] upload_url: ") catch {};
+            _ = stderr.write(upload_url) catch {};
+            _ = stderr.write("\n") catch {};
+            _ = stderr.write("[zlack] file_id: ") catch {};
+            _ = stderr.write(file_id) catch {};
+            _ = stderr.write("\n") catch {};
+        }
+
+        // Step 2: POST file data to upload_url
+        {
+            const heap_buf = try self.allocator.alloc(u8, 4096);
+            defer self.allocator.free(heap_buf);
+            var response_writer = std.Io.Writer.fixed(heap_buf);
+
+            const r2 = self.http_client.fetch(.{
+                .location = .{ .url = upload_url },
+                .method = .POST,
+                .payload = file_data,
+                .headers = .{
+                    .content_type = .{ .override = "application/octet-stream" },
+                    .accept_encoding = .{ .override = "identity" },
+                },
+                .response_writer = &response_writer,
+                .redirect_behavior = .init(3),
+            }) catch |err| {
+                const stderr = std.fs.File.stderr();
+                _ = stderr.write("[zlack] step2 fetch error: ") catch {};
+                _ = stderr.write(@errorName(err)) catch {};
+                _ = stderr.write("\n") catch {};
+                return error.HttpRequestFailed;
+            };
+
+            const s2: u16 = @intFromEnum(r2.status);
+            logDebug("upload step2 status", s2);
+            if (s2 != 200) return error.HttpRequestFailed;
+        }
+
+        // Step 3: Complete upload and share to channel
+        {
+            var json_buf: [512]u8 = undefined;
+            const json_payload = std.fmt.bufPrint(&json_buf,
+                \\{{"files":[{{"id":"{s}"}}],"channel_id":"{s}"}}
+            , .{ file_id, channel_id }) catch return error.SlackApiError;
+
+            var auth_buf2: [256]u8 = undefined;
+            const auth_str2 = std.fmt.bufPrint(&auth_buf2, "Bearer {s}", .{self.user_token}) catch return error.SlackApiError;
+
+            const heap_buf2 = try self.allocator.alloc(u8, 4096);
+            defer self.allocator.free(heap_buf2);
+            var response_writer2 = std.Io.Writer.fixed(heap_buf2);
+
+            const r3 = self.http_client.fetch(.{
+                .location = .{ .url = "https://slack.com/api/files.completeUploadExternal" },
+                .method = .POST,
+                .payload = json_payload,
+                .headers = .{
+                    .authorization = .{ .override = auth_str2 },
+                    .content_type = .{ .override = "application/json; charset=utf-8" },
+                    .accept_encoding = .{ .override = "identity" },
+                },
+                .response_writer = &response_writer2,
+                .redirect_behavior = .unhandled,
+            }) catch return error.HttpRequestFailed;
+
+            const s3: u16 = @intFromEnum(r3.status);
+            logDebug("upload step3 status", s3);
+
+            // Check Slack API response
+            const resp_body = heap_buf2[0..response_writer2.end];
+            const parsed3 = std.json.parseFromSlice(types.SlackError, self.allocator, resp_body, .{
+                .ignore_unknown_fields = true,
+            }) catch return error.JsonParseFailed;
+            defer parsed3.deinit();
+            if (!parsed3.value.ok) {
+                const stderr = std.fs.File.stderr();
+                _ = stderr.write("[zlack] completeUpload error: ") catch {};
+                if (parsed3.value.@"error") |e| _ = stderr.write(e) catch {};
+                _ = stderr.write("\n") catch {};
+                return error.SlackApiError;
+            }
+        }
+    }
+
+    fn logDebug(label: []const u8, status: u16) void {
+        const stderr = std.fs.File.stderr();
+        _ = stderr.write("[zlack] ") catch {};
+        _ = stderr.write(label) catch {};
+        _ = stderr.write(": ") catch {};
+        var buf: [8]u8 = undefined;
+        const s = std.fmt.bufPrint(&buf, "{d}", .{status}) catch "???";
+        _ = stderr.write(s) catch {};
+        _ = stderr.write("\n") catch {};
     }
 
     pub fn appsConnectionsOpen(self: *SlackClient) ![]const u8 {
@@ -290,6 +451,7 @@ pub const SlackClient = struct {
                 .headers = .{
                     .authorization = .{ .override = auth_str },
                     .content_type = .{ .override = "application/x-www-form-urlencoded" },
+                    .accept_encoding = .{ .override = "identity" },
                 },
                 .response_writer = &response_writer,
                 .redirect_behavior = .unhandled,

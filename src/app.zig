@@ -25,9 +25,11 @@ const Root = root_mod.Root;
 const Keychain = keychain_mod.Keychain;
 const Sidebar = @import("tui/sidebar.zig").Sidebar;
 const Messages = @import("tui/messages.zig").Messages;
+const Modal = @import("tui/modal.zig").Modal;
 
 const Event = vaxis.Event;
 const Loop = vaxis.Loop;
+const Mouse = vaxis.Mouse;
 
 /// Application state management for zlack.
 ///
@@ -52,6 +54,7 @@ pub const App = struct {
     // Owned slices for TUI widget data (freed on update)
     sidebar_entries: ?[]Sidebar.ChannelEntry,
     message_entries: ?[]Messages.MessageEntry,
+    modal_items: ?[]Modal.ModalItem,
 
     pub fn init(allocator: Allocator, reconfigure: bool) !App {
         const vx = try vaxis.Vaxis.init(allocator, .{});
@@ -73,6 +76,7 @@ pub const App = struct {
             .reconfigure = reconfigure,
             .sidebar_entries = null,
             .message_entries = null,
+            .modal_items = null,
         };
     }
 
@@ -82,6 +86,8 @@ pub const App = struct {
 
         // Clean up TUI
         if (self.tty) |*tty| {
+            self.vx.setMouseMode(tty.writer(), false) catch {};
+            self.vx.exitAltScreen(tty.writer()) catch {};
             self.vx.deinit(self.allocator, tty.writer());
             tty.deinit();
         } else {
@@ -94,6 +100,7 @@ pub const App = struct {
         // Clean up owned TUI data
         if (self.sidebar_entries) |entries| self.allocator.free(entries);
         if (self.message_entries) |entries| self.allocator.free(entries);
+        if (self.modal_items) |items| self.allocator.free(items);
 
         // Clean up subsystems
         self.tui_root.deinit(self.allocator);
@@ -102,6 +109,13 @@ pub const App = struct {
         if (self.slack_client) |*sc| sc.deinit();
         self.cache.deinit();
         if (self.db) |*d| d.deinit();
+
+        // Free auth strings (heap-allocated by authTest dupe)
+        if (self.auth) |a| {
+            // team_id and user_id are always duped by authTest or loadFromKeychain
+            self.allocator.free(a.team_id);
+            self.allocator.free(a.user_id);
+        }
     }
 
     /// Main event loop.
@@ -142,6 +156,9 @@ pub const App = struct {
                 _ = stderr.write("\n") catch {};
                 return err;
             };
+            // Free unused duped fields
+            if (auth_resp.team) |t| self.allocator.free(t);
+            if (auth_resp.user) |u| self.allocator.free(u);
             self.auth = Auth{
                 .user_token = env_user_token.?,
                 .app_token = env_app_token.?,
@@ -186,6 +203,7 @@ pub const App = struct {
         self.tty = try vaxis.Tty.init(&self.tty_buf);
         const tty_writer = self.tty.?.writer();
         try self.vx.enterAltScreen(tty_writer);
+        try self.vx.setMouseMode(tty_writer, true);
 
         // Set up the event loop
         self.loop = .{ .vaxis = &self.vx, .tty = &self.tty.? };
@@ -199,18 +217,19 @@ pub const App = struct {
         }
         logStep("Step 4: TUI OK");
 
-        // --- Step 5: Fetch channels and users, show loading ---
-        logStep("Step 5: Fetch channels");
-        self.renderLoadingScreen("zlack を起動中... チャンネル一覧を取得しています");
-
-        const api_channels = self.slack_client.?.conversationsList() catch &.{};
-        self.populateChannels(api_channels);
-
+        // --- Step 5: Fetch users first (needed for DM name resolution), then channels ---
         logStep("Step 5: Fetch users");
         self.renderLoadingScreen("zlack を起動中... ユーザー一覧を取得しています");
 
         const api_users = self.slack_client.?.usersList() catch &.{};
         self.populateUsers(api_users);
+
+        logStep("Step 5: Fetch channels");
+        self.renderLoadingScreen("zlack を起動中... チャンネル一覧を取得しています");
+
+        const api_channels = self.slack_client.?.conversationsList() catch &.{};
+        const api_ims = self.slack_client.?.conversationsListIm();
+        self.populateAllChannels(api_channels, api_ims);
 
         // --- Step 6: Socket Mode connection ---
         logStep("Step 6: Socket Mode");
@@ -260,15 +279,30 @@ pub const App = struct {
                             },
                             .send_message => |msg| {
                                 self.sendMessage(msg.text, msg.thread_ts);
+                                self.tui_root.input.clear();
+                                // Refresh messages after sending
+                                if (self.current_channel) |ch| {
+                                    self.selectChannel(ch);
+                                }
+                            },
+                            .upload_file => |path| {
+                                self.uploadFile(path);
+                                self.tui_root.input.file_mode = false;
+                                self.tui_root.input.clear();
                             },
                             .open_thread => |_| {
                                 // Thread loading would go here in a full implementation
                             },
                             .toggle_thread => {},
                             .switch_workspace => {},
-                            .search_channel => {},
+                            .search_channel => {
+                                self.populateModalChannels();
+                            },
                         }
                     }
+                },
+                .mouse => |mouse| {
+                    self.handleMouse(mouse);
                 },
                 .winsize => |ws| {
                     const tw = self.tty.?.writer();
@@ -351,6 +385,32 @@ pub const App = struct {
         self.updateMessages(channel_id);
     }
 
+    fn uploadFile(self: *App, path: []const u8) void {
+        if (self.current_channel == null) return;
+        if (self.slack_client) |*client| {
+            // Trim whitespace from path
+            const trimmed = std.mem.trim(u8, path, " \t\r\n");
+            {
+                const stderr = std.fs.File.stderr();
+                _ = stderr.write("[zlack] uploading: '") catch {};
+                _ = stderr.write(trimmed) catch {};
+                _ = stderr.write("'\n") catch {};
+            }
+            client.filesUpload(self.current_channel.?, trimmed) catch |err| {
+                const name = @errorName(err);
+                const stderr = std.fs.File.stderr();
+                _ = stderr.write("[zlack] upload failed: ") catch {};
+                _ = stderr.write(name) catch {};
+                _ = stderr.write("\n") catch {};
+                return;
+            };
+            // Refresh messages to show the uploaded file
+            if (self.current_channel) |ch| {
+                self.selectChannel(ch);
+            }
+        }
+    }
+
     fn sendMessage(self: *App, text: []const u8, thread_ts: ?[]const u8) void {
         if (self.current_channel == null) return;
         if (self.slack_client) |*client| {
@@ -365,16 +425,37 @@ pub const App = struct {
 
     // --- Data population helpers ---
 
-    fn populateChannels(self: *App, api_channels: []const types.Channel) void {
+    fn populateAllChannels(self: *App, api_channels: []const types.Channel, api_ims: []const types.Channel) void {
         var cached: std.ArrayList(CachedChannel) = .empty;
         defer cached.deinit(self.allocator);
 
+        // Regular channels
         for (api_channels) |ch| {
+            const channel_type: []const u8 = if (ch.is_group != null and ch.is_group.?)
+                "private_channel"
+            else
+                "public_channel";
+
             cached.append(self.allocator, .{
                 .id = ch.id,
                 .name = ch.name,
                 .is_member = if (ch.is_member) |m| m else false,
-                .channel_type = if (ch.is_group != null and ch.is_group.?) "private_channel" else "public_channel",
+                .channel_type = channel_type,
+            }) catch continue;
+        }
+
+        // DMs (im)
+        for (api_ims) |ch| {
+            const name: []const u8 = if (ch.user) |uid|
+                self.cache.getUserName(uid) orelse uid
+            else
+                "DM";
+
+            cached.append(self.allocator, .{
+                .id = ch.id,
+                .name = name,
+                .is_member = true,
+                .channel_type = "im",
             }) catch continue;
         }
 
@@ -405,13 +486,25 @@ pub const App = struct {
 
         const entries = self.allocator.alloc(Sidebar.ChannelEntry, channels.len) catch return;
         for (channels, 0..) |ch, i| {
+            const is_im = std.mem.eql(u8, ch.channel_type, "im");
             entries[i] = .{
                 .id = ch.id,
                 .name = ch.name,
                 .is_private = std.mem.eql(u8, ch.channel_type, "private_channel"),
+                .is_im = is_im,
+                .section = if (is_im) .dms else .channels,
                 .has_unread = false,
             };
         }
+
+        // Sort by section order (channels first, then DMs)
+        std.mem.sort(Sidebar.ChannelEntry, entries, {}, struct {
+            fn lessThan(_: void, a: Sidebar.ChannelEntry, b: Sidebar.ChannelEntry) bool {
+                const oa = @intFromEnum(a.section);
+                const ob = @intFromEnum(b.section);
+                return oa < ob;
+            }
+        }.lessThan);
 
         self.sidebar_entries = entries;
         self.tui_root.sidebar.setChannels(entries);
@@ -444,6 +537,112 @@ pub const App = struct {
 
         self.message_entries = entries;
         self.tui_root.messages.setMessages(entries);
+    }
+
+    fn populateModalChannels(self: *App) void {
+        if (self.modal_items) |items| self.allocator.free(items);
+
+        const channels = self.cache.getChannels();
+        defer self.allocator.free(channels);
+
+        const items = self.allocator.alloc(Modal.ModalItem, channels.len) catch return;
+        for (channels, 0..) |ch, i| {
+            items[i] = .{
+                .id = ch.id,
+                .display_name = ch.name,
+            };
+        }
+
+        self.modal_items = items;
+        if (self.tui_root.modal) |*m| {
+            m.setItems(self.allocator, items);
+        }
+    }
+
+    fn handleMouse(self: *App, raw_mouse: Mouse) void {
+        const mouse = self.vx.translateMouse(raw_mouse);
+        const col: u16 = @intCast(@max(0, mouse.col));
+        const row: u16 = @intCast(@max(0, mouse.row));
+        const sidebar_w: u16 = 20;
+        const total_h = self.vx.window().height;
+        const input_top = total_h -| 2;
+
+        // --- Left click: focus + select ---
+        if (mouse.button == .left and mouse.type == .press) {
+            if (row >= input_top) {
+                // Input area
+                self.tui_root.focus = .input;
+            } else if (row >= 1 and col < sidebar_w) {
+                // Sidebar — calculate which channel was clicked
+                self.tui_root.focus = .sidebar;
+                const click_offset = @as(usize, row - 1); // row 1 = first sidebar row
+                // Map display row to channel index (account for section headers)
+                if (self.mapSidebarRowToIndex(click_offset)) |idx| {
+                    self.tui_root.sidebar.selected_idx = idx;
+                    // Double-purpose: single click selects, so also open the channel
+                    self.selectChannel(self.tui_root.sidebar.channels[idx].id);
+                    self.tui_root.focus = .input;
+                }
+            } else if (row >= 1) {
+                // Messages area
+                self.tui_root.focus = .messages;
+                const click_row = @as(usize, row - 1);
+                // Each message takes ~2 rows (name+ts, text).
+                const estimated_idx = self.tui_root.messages.scroll_offset + click_row / 2;
+                if (self.tui_root.messages.messages.len > 0) {
+                    self.tui_root.messages.selected_idx = @min(estimated_idx, self.tui_root.messages.messages.len - 1);
+                }
+            }
+            return;
+        }
+
+        // --- Wheel scroll ---
+        if (mouse.button != .wheel_up and mouse.button != .wheel_down) return;
+
+        const scroll_amount: usize = 3;
+        if (col < sidebar_w) {
+            if (mouse.button == .wheel_down) {
+                self.tui_root.sidebar.selected_idx = @min(
+                    self.tui_root.sidebar.selected_idx + scroll_amount,
+                    if (self.tui_root.sidebar.channels.len > 0) self.tui_root.sidebar.channels.len - 1 else 0,
+                );
+            } else {
+                self.tui_root.sidebar.selected_idx = if (self.tui_root.sidebar.selected_idx >= scroll_amount)
+                    self.tui_root.sidebar.selected_idx - scroll_amount
+                else
+                    0;
+            }
+        } else {
+            if (mouse.button == .wheel_down) {
+                self.tui_root.messages.selected_idx = @min(
+                    self.tui_root.messages.selected_idx + scroll_amount,
+                    if (self.tui_root.messages.messages.len > 0) self.tui_root.messages.messages.len - 1 else 0,
+                );
+            } else {
+                self.tui_root.messages.selected_idx = if (self.tui_root.messages.selected_idx >= scroll_amount)
+                    self.tui_root.messages.selected_idx - scroll_amount
+                else
+                    0;
+            }
+        }
+    }
+
+    /// Map a sidebar display row (0-based from content top) to a channel index,
+    /// accounting for section headers, blank separators, and scroll offset.
+    fn mapSidebarRowToIndex(self: *App, target_row: usize) ?usize {
+        const absolute_row = target_row + self.tui_root.sidebar.scroll_offset;
+        var display_row: usize = 0;
+        var prev_section: ?Sidebar.Section = null;
+        for (self.tui_root.sidebar.channels, 0..) |ch, i| {
+            if (prev_section == null or prev_section.? != ch.section) {
+                if (prev_section != null) display_row += 1; // blank line
+                display_row += 1; // section header
+                prev_section = ch.section;
+            }
+            if (display_row == absolute_row) return i;
+            display_row += 1;
+        }
+        return null;
     }
 
     fn renderLoadingScreen(self: *App, message: []const u8) void {

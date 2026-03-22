@@ -36,6 +36,7 @@ pub const Root = struct {
     pub const AppAction = union(enum) {
         select_channel: []const u8,
         send_message: struct { text: []const u8, thread_ts: ?[]const u8 },
+        upload_file: []const u8,
         open_thread: struct { channel_id: []const u8, thread_ts: []const u8 },
         toggle_thread,
         quit,
@@ -67,7 +68,10 @@ pub const Root = struct {
                         self.show_modal = null;
                         return switch (modal_type) {
                             .workspace_switch => .switch_workspace,
-                            .channel_search => .{ .select_channel = id },
+                            .channel_search => blk: {
+                                self.focus = .input;
+                                break :blk .{ .select_channel = id };
+                            },
                         };
                     },
                     .cancel => {
@@ -111,11 +115,18 @@ pub const Root = struct {
             self.modal = Modal.init(.workspace_switch);
             return .switch_workspace;
         }
-        // Ctrl+N: channel search modal
-        if (key.matches('n', .{ .ctrl = true })) {
+        // Ctrl+K: channel search modal (same as Slack desktop)
+        if (key.matches('k', .{ .ctrl = true })) {
             self.show_modal = .channel_search;
             self.modal = Modal.init(.channel_search);
             return .search_channel;
+        }
+        // Ctrl+U: file upload mode
+        if (key.matches('u', .{ .ctrl = true })) {
+            self.input.file_mode = true;
+            self.input.clear();
+            self.focus = .input;
+            return null;
         }
 
         // Dispatch to focused widget
@@ -123,7 +134,10 @@ pub const Root = struct {
             .sidebar => {
                 if (self.sidebar.handleInput(key)) |action| {
                     switch (action) {
-                        .select_channel => |id| return .{ .select_channel = id },
+                        .select_channel => |id| {
+                            self.focus = .input;
+                            return .{ .select_channel = id };
+                        },
                         .none => return null,
                     }
                 }
@@ -153,6 +167,9 @@ pub const Root = struct {
             .input => {
                 if (self.input.handleInput(allocator, key)) |action| {
                     switch (action) {
+                        .upload_file => |path| {
+                            return .{ .upload_file = path };
+                        },
                         .send_message => |text| {
                             const thread_ts: ?[]const u8 = if (self.input.thread_mode)
                                 if (self.thread.parent_msg) |p| p.ts else null
@@ -193,7 +210,7 @@ pub const Root = struct {
     }
 
     /// Render the entire TUI layout.
-    pub fn render(self: *const Root, win: Window) void {
+    pub fn render(self: *Root, win: Window) void {
         win.clear();
 
         const total_h = win.height;
@@ -229,12 +246,16 @@ pub const Root = struct {
             .height = content_h,
         });
 
-        // Sidebar border (right edge)
+        // Sidebar border (right edge) — highlighted when sidebar is focused
+        const border_style: Cell.Style = if (self.focus == .sidebar)
+            .{ .fg = .{ .index = 4 }, .bold = true } // blue when focused
+        else
+            .{ .dim = true };
         var sr: u16 = 0;
         while (sr < content_h) : (sr += 1) {
             win.writeCell(sidebar_w, sr + 1, .{
                 .char = .{ .grapheme = "\xe2\x94\x82", .width = 1 }, // "│"
-                .style = .{ .dim = true },
+                .style = border_style,
             });
         }
 
@@ -266,8 +287,17 @@ pub const Root = struct {
             self.thread.render(thread_win);
         }
 
-        // Focus indicator: highlight the border of the focused pane
-        // (visual cue for which pane is active — simplified for MVP)
+        // Focus indicator in header
+        const focus_label: []const u8 = switch (self.focus) {
+            .sidebar => "[Channels]",
+            .messages => "[Messages]",
+            .thread => "[Thread]",
+            .input => "[Input]",
+        };
+        _ = header_win.printSegment(.{
+            .text = focus_label,
+            .style = .{ .fg = .{ .index = 4 }, .bold = true },
+        }, .{ .col_offset = @intCast(@min(total_w -| 12, self.workspace_name.len + 20)) });
 
         // Modal overlay (rendered last, on top of everything)
         if (self.modal) |*m| {

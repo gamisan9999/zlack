@@ -4,7 +4,8 @@ const std = @import("std");
 
 pub const Channel = struct {
     id: []const u8,
-    name: []const u8,
+    name: []const u8 = "",
+    user: ?[]const u8 = null,
     is_channel: ?bool = null,
     is_group: ?bool = null,
     is_im: ?bool = null,
@@ -84,6 +85,12 @@ pub const AppsConnectionsOpenResponse = struct {
 pub const SlackError = struct {
     ok: bool,
     @"error": ?[]const u8 = null,
+};
+
+pub const GetUploadUrlResponse = struct {
+    ok: bool,
+    upload_url: ?[]const u8 = null,
+    file_id: ?[]const u8 = null,
 };
 
 // --- Tests ---
