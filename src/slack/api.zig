@@ -114,7 +114,14 @@ pub const SlackClient = struct {
     pub fn authTest(self: *SlackClient) !types.AuthTestResponse {
         const parsed = try self.apiCallParsed(types.AuthTestResponse, "auth.test", self.user_token, &.{});
         defer parsed.deinit();
-        return parsed.value;
+        // Dupe strings before deinit frees the JSON arena
+        return .{
+            .ok = parsed.value.ok,
+            .user_id = if (parsed.value.user_id) |s| try self.allocator.dupe(u8, s) else null,
+            .team_id = if (parsed.value.team_id) |s| try self.allocator.dupe(u8, s) else null,
+            .team = if (parsed.value.team) |s| try self.allocator.dupe(u8, s) else null,
+            .user = if (parsed.value.user) |s| try self.allocator.dupe(u8, s) else null,
+        };
     }
 
     pub fn conversationsList(self: *SlackClient) ![]const types.Channel {
