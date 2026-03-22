@@ -1,0 +1,7 @@
+.devenv/
+.devenv.flake.nix
+devenv.lock
+.direnv/
+zig-out/
+zig-cache/
+.zig-cache/

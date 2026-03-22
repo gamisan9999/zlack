@@ -1,0 +1,17 @@
+.{
+    .name = .zlack,
+    .version = "0.1.0",
+    .fingerprint = 0xd915666b330abb11,
+    .minimum_zig_version = "0.15.0",
+    .paths = .{ "build.zig", "build.zig.zon", "src" },
+    .dependencies = .{
+        .websocket = .{
+            .url = "https://github.com/karlseguin/websocket.zig/archive/refs/heads/master.tar.gz",
+            .hash = "websocket-0.1.0-ZPISdRlzAwBB_Bz2UMMqxYqF6YEVTIBoFsbzwPUJTHIc",
+        },
+        .vaxis = .{
+            .url = "https://github.com/rockorager/libvaxis/archive/refs/heads/main.tar.gz",
+            .hash = "vaxis-0.5.1-BWNV_JJOCQAtdJyLvrYCKbKIhX9q3liQkKMAzujWS4HJ",
+        },
+    },
+}
