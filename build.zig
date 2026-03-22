@@ -48,6 +48,7 @@ pub fn build(b: *std.Build) void {
         "src/platform/keychain.zig",
         "src/slack/auth.zig",
         "src/slack/socket.zig",
+        "src/store/cache.zig",
     };
 
     for (test_modules) |mod| {
