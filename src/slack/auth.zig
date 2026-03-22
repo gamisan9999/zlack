@@ -92,14 +92,9 @@ pub const Auth = struct {
     /// Postconditions:
     ///   - Tokens are stored (or updated) in Keychain
     pub fn saveToKeychain(self: Auth, kc: KeychainIf) !void {
-        var user_service_buf: [128]u8 = undefined;
-        const user_service = std.fmt.bufPrint(&user_service_buf, "zlack.user.{s}", .{self.team_id}) catch return error.InvalidTokenFormat;
-
-        var app_service_buf: [128]u8 = undefined;
-        const app_service = std.fmt.bufPrint(&app_service_buf, "zlack.app.{s}", .{self.team_id}) catch return error.InvalidTokenFormat;
-
-        try kc.save(user_service, "default", self.user_token);
-        try kc.save(app_service, "default", self.app_token);
+        // Use fixed service names for simplicity (team_id is not known before auth)
+        try kc.save("zlack.user.default", "default", self.user_token);
+        try kc.save("zlack.app.default", "default", self.app_token);
     }
 
     /// Interactive token input from stdin/stdout.

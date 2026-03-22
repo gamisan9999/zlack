@@ -188,10 +188,11 @@ pub const App = struct {
                 _ = stderr.write("\n") catch {};
                 return err;
             };
-            // Save to keychain
-            if (self.auth) |a| {
-                a.saveToKeychain(kc) catch {};
-            }
+        }
+
+        // Save to keychain (env or prompt — always persist for next launch)
+        if (self.auth) |a| {
+            a.saveToKeychain(kc) catch {};
         }
 
         const a = self.auth.?;
