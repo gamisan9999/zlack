@@ -378,6 +378,60 @@ test "updateUsers replaces existing" {
     try std.testing.expect(std.mem.eql(u8, name, "bob"));
 }
 
+test "getUserIdByName matches display_name" {
+    var cache = Cache.init(std.testing.allocator);
+    defer cache.deinit();
+
+    const users = [_]CachedUser{
+        .{ .id = "U001", .name = "john.doe", .display_name = "John" },
+        .{ .id = "U002", .name = "jane.doe", .display_name = "Jane" },
+    };
+    cache.updateUsers(&users);
+
+    const id = cache.getUserIdByName("John") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(std.mem.eql(u8, id, "U001"));
+}
+
+test "getUserIdByName matches name when no display_name" {
+    var cache = Cache.init(std.testing.allocator);
+    defer cache.deinit();
+
+    const users = [_]CachedUser{
+        .{ .id = "U001", .name = "john.doe", .display_name = null },
+    };
+    cache.updateUsers(&users);
+
+    const id = cache.getUserIdByName("john.doe") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(std.mem.eql(u8, id, "U001"));
+}
+
+test "getUserIdByName returns null for unknown" {
+    var cache = Cache.init(std.testing.allocator);
+    defer cache.deinit();
+
+    const users = [_]CachedUser{
+        .{ .id = "U001", .name = "john.doe", .display_name = "John" },
+    };
+    cache.updateUsers(&users);
+
+    try std.testing.expectEqual(@as(?[]const u8, null), cache.getUserIdByName("nobody"));
+}
+
+test "getUserIdByName prefers display_name over name" {
+    var cache = Cache.init(std.testing.allocator);
+    defer cache.deinit();
+
+    const users = [_]CachedUser{
+        .{ .id = "U001", .name = "john.doe", .display_name = "John" },
+    };
+    cache.updateUsers(&users);
+
+    // Should match display_name
+    try std.testing.expect(cache.getUserIdByName("John") != null);
+    // Should also match name
+    try std.testing.expect(cache.getUserIdByName("john.doe") != null);
+}
+
 test "addMessage to multiple channels" {
     var cache = Cache.init(std.testing.allocator);
     defer cache.deinit();

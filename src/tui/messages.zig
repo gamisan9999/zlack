@@ -164,3 +164,59 @@ pub const Messages = struct {
         }
     }
 };
+
+// ===========================================================================
+// Tests
+// ===========================================================================
+
+test "formatSlackTs valid epoch" {
+    var buf: [20]u8 = undefined;
+    const result = Messages.formatSlackTs("0.000000", &buf);
+    // Epoch 0 = 1970-01-01 in UTC (local offset may vary)
+    try std.testing.expect(result.len == 19); // "YYYY-MM-DD HH:MM:SS"
+    try std.testing.expect(result[4] == '-');
+    try std.testing.expect(result[7] == '-');
+    try std.testing.expect(result[10] == ' ');
+    try std.testing.expect(result[13] == ':');
+    try std.testing.expect(result[16] == ':');
+}
+
+test "formatSlackTs with decimal part" {
+    var buf: [20]u8 = undefined;
+    const result = Messages.formatSlackTs("1700000000.123456", &buf);
+    try std.testing.expect(result.len == 19);
+    // 2023-11-14 in UTC
+    try std.testing.expect(std.mem.startsWith(u8, result, "2023-11-1"));
+}
+
+test "formatSlackTs invalid returns original" {
+    var buf: [20]u8 = undefined;
+    const result = Messages.formatSlackTs("not_a_number", &buf);
+    try std.testing.expectEqualStrings("not_a_number", result);
+}
+
+test "formatSlackTs empty string returns original" {
+    var buf: [20]u8 = undefined;
+    const result = Messages.formatSlackTs("", &buf);
+    try std.testing.expectEqualStrings("", result);
+}
+
+test "formatSlackTs no dot" {
+    var buf: [20]u8 = undefined;
+    const result = Messages.formatSlackTs("1700000000", &buf);
+    try std.testing.expect(result.len == 19);
+}
+
+test "formatSlackTs_XSS_injection" {
+    // Security: ensure script tags in ts are not parsed as epoch
+    var buf: [20]u8 = undefined;
+    const result = Messages.formatSlackTs("<script>alert(1)</script>", &buf);
+    // Should return original since it can't parse
+    try std.testing.expectEqualStrings("<script>alert(1)</script>", result);
+}
+
+test "formatSlackTs_PathTraversal" {
+    var buf: [20]u8 = undefined;
+    const result = Messages.formatSlackTs("../../etc/passwd", &buf);
+    try std.testing.expectEqualStrings("../../etc/passwd", result);
+}

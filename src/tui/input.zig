@@ -209,3 +209,75 @@ pub const Input = struct {
         return 1; // invalid, skip one byte
     }
 };
+
+// ===========================================================================
+// Tests
+// ===========================================================================
+
+test "displayWidth ASCII" {
+    try std.testing.expectEqual(@as(usize, 5), Input.displayWidth("hello"));
+}
+
+test "displayWidth Japanese" {
+    // "あ" = 3 bytes UTF-8, display width 2
+    try std.testing.expectEqual(@as(usize, 2), Input.displayWidth("あ"));
+}
+
+test "displayWidth mixed ASCII and Japanese" {
+    // "aあb" = 1 + 2 + 1 = 4
+    try std.testing.expectEqual(@as(usize, 4), Input.displayWidth("aあb"));
+}
+
+test "displayWidth empty string" {
+    try std.testing.expectEqual(@as(usize, 0), Input.displayWidth(""));
+}
+
+test "displayWidth CJK ideograph" {
+    // "漢字" = 2 + 2 = 4
+    try std.testing.expectEqual(@as(usize, 4), Input.displayWidth("漢字"));
+}
+
+test "displayWidth fullwidth katakana" {
+    // "アイ" = 2 + 2 = 4
+    try std.testing.expectEqual(@as(usize, 4), Input.displayWidth("アイ"));
+}
+
+test "codepointWidth ASCII" {
+    try std.testing.expectEqual(@as(usize, 1), Input.codepointWidth('a'));
+    try std.testing.expectEqual(@as(usize, 1), Input.codepointWidth(' '));
+}
+
+test "codepointWidth CJK" {
+    try std.testing.expectEqual(@as(usize, 2), Input.codepointWidth(0x3042)); // あ
+    try std.testing.expectEqual(@as(usize, 2), Input.codepointWidth(0x6F22)); // 漢
+}
+
+test "nextCodepointLen ASCII" {
+    try std.testing.expectEqual(@as(usize, 1), Input.nextCodepointLen("abc", 0));
+}
+
+test "nextCodepointLen 3-byte UTF-8" {
+    try std.testing.expectEqual(@as(usize, 3), Input.nextCodepointLen("あ", 0));
+}
+
+test "nextCodepointLen at end" {
+    try std.testing.expectEqual(@as(usize, 0), Input.nextCodepointLen("a", 1));
+}
+
+test "prevCodepointLen ASCII" {
+    try std.testing.expectEqual(@as(usize, 1), Input.prevCodepointLen("ab", 1));
+}
+
+test "prevCodepointLen 3-byte UTF-8" {
+    try std.testing.expectEqual(@as(usize, 3), Input.prevCodepointLen("あ", 3));
+}
+
+test "prevCodepointLen at start" {
+    try std.testing.expectEqual(@as(usize, 0), Input.prevCodepointLen("a", 0));
+}
+
+test "prevCodepointLen mixed" {
+    // "aあ" = 'a'(1byte) + 'あ'(3bytes) = 4 bytes
+    try std.testing.expectEqual(@as(usize, 3), Input.prevCodepointLen("aあ", 4));
+    try std.testing.expectEqual(@as(usize, 1), Input.prevCodepointLen("aあ", 1));
+}

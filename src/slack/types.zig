@@ -198,6 +198,40 @@ test "parse ConversationsHistoryResponse from JSON" {
     try std.testing.expectEqualStrings("next1", resp.value.response_metadata.?.next_cursor.?);
 }
 
+test "parse GetUploadUrlResponse from JSON" {
+    const json =
+        \\{"ok":true,"upload_url":"https://files.slack.com/upload/v1/abc123","file_id":"F12345"}
+    ;
+    const resp = try std.json.parseFromSlice(GetUploadUrlResponse, std.testing.allocator, json, .{ .ignore_unknown_fields = true });
+    defer resp.deinit();
+    try std.testing.expect(resp.value.ok == true);
+    try std.testing.expectEqualStrings("https://files.slack.com/upload/v1/abc123", resp.value.upload_url.?);
+    try std.testing.expectEqualStrings("F12345", resp.value.file_id.?);
+}
+
+test "parse GetUploadUrlResponse error" {
+    const json =
+        \\{"ok":false,"error":"missing_scope"}
+    ;
+    const resp = try std.json.parseFromSlice(GetUploadUrlResponse, std.testing.allocator, json, .{ .ignore_unknown_fields = true });
+    defer resp.deinit();
+    try std.testing.expect(resp.value.ok == false);
+    try std.testing.expect(resp.value.upload_url == null);
+    try std.testing.expect(resp.value.file_id == null);
+}
+
+test "parse Channel with im fields" {
+    const json =
+        \\{"id":"D12345","is_im":true,"user":"U99999"}
+    ;
+    const channel = try std.json.parseFromSlice(Channel, std.testing.allocator, json, .{ .ignore_unknown_fields = true });
+    defer channel.deinit();
+    try std.testing.expectEqualStrings("D12345", channel.value.id);
+    try std.testing.expect(channel.value.is_im.? == true);
+    try std.testing.expectEqualStrings("U99999", channel.value.user.?);
+    try std.testing.expectEqualStrings("", channel.value.name);
+}
+
 test "ignore unknown fields from Slack API" {
     const json =
         \\{"id":"C12345","name":"general","purpose":{"value":"General chat"},"topic":{"value":""},"extra_field":42}
