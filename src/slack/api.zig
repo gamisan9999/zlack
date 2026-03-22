@@ -292,52 +292,55 @@ pub const SlackClient = struct {
         const url_str = std.fmt.bufPrint(&url_buf, "{s}{s}", .{ base_url, method }) catch return error.JsonParseFailed;
 
         // Build form-encoded body
-        var body_buf: std.ArrayList(u8) = .empty;
-        defer body_buf.deinit(self.allocator);
+        var form_body: std.ArrayList(u8) = .empty;
+        defer form_body.deinit(self.allocator);
         for (params, 0..) |param, i| {
-            if (i > 0) try body_buf.append(self.allocator, '&');
-            try uriEncodeAppend(self.allocator, &body_buf, param.name);
-            try body_buf.append(self.allocator, '=');
-            try uriEncodeAppend(self.allocator, &body_buf, param.value);
+            if (i > 0) try form_body.append(self.allocator, '&');
+            try uriEncodeAppend(self.allocator, &form_body, param.name);
+            try form_body.append(self.allocator, '=');
+            try uriEncodeAppend(self.allocator, &form_body, param.value);
         }
 
         // Build auth header value
         var auth_buf: [256]u8 = undefined;
         const auth_str = std.fmt.bufPrint(&auth_buf, "Bearer {s}", .{token}) catch return error.JsonParseFailed;
 
+        const uri = std.Uri.parse(url_str) catch return error.HttpRequestFailed;
+        const payload: ?[]const u8 = if (form_body.items.len > 0) form_body.items else null;
+
         var attempt: u32 = 1;
         while (true) {
-            const uri = std.Uri.parse(url_str) catch return error.JsonParseFailed;
-
-            var req = self.http_client.request(.POST, uri, .{
+            var req = std.http.Client.request(&self.http_client, .POST, uri, .{
+                .redirect_behavior = .unhandled,
                 .headers = .{
                     .authorization = .{ .override = auth_str },
                     .content_type = .{ .override = "application/x-www-form-urlencoded" },
                 },
-                .redirect_behavior = .unhandled,
-            }) catch return error.JsonParseFailed;
+            }) catch return error.HttpRequestFailed;
             defer req.deinit();
 
-            // Send body
-            var send_buf: [4096]u8 = undefined;
-            req.transfer_encoding = .{ .content_length = body_buf.items.len };
-            var bw = req.sendBodyUnflushed(&send_buf) catch return error.JsonParseFailed;
-            bw.writer.end = body_buf.items.len;
-            bw.end() catch return error.JsonParseFailed;
-            req.connection.?.flush() catch return error.JsonParseFailed;
+            // Send body (following fetch pattern from Zig stdlib)
+            if (payload) |p| {
+                req.transfer_encoding = .{ .content_length = p.len };
+                var body_writer = req.sendBodyUnflushed(&.{}) catch return error.HttpRequestFailed;
+                body_writer.writer.writeAll(p) catch return error.HttpRequestFailed;
+                body_writer.end() catch return error.HttpRequestFailed;
+                if (req.connection) |conn| conn.flush() catch return error.HttpRequestFailed;
+            } else {
+                req.sendBodiless() catch return error.HttpRequestFailed;
+            }
 
-            // Receive response head
-            var redirect_buf: [1]u8 = undefined;
-            var response = req.receiveHead(&redirect_buf) catch return error.JsonParseFailed;
-
+            // Receive response
+            var response = req.receiveHead(&.{}) catch return error.HttpRequestFailed;
             const status: u16 = @intFromEnum(response.head.status);
 
             const action = shouldRetry(status, attempt, null);
             switch (action) {
                 .success => {
+                    // Read response body
                     var transfer_buf: [8192]u8 = undefined;
-                    const body_reader = response.reader(&transfer_buf);
-                    const response_body = body_reader.allocRemaining(self.allocator, @enumFromInt(1024 * 1024)) catch return error.JsonParseFailed;
+                    const reader = response.reader(&transfer_buf);
+                    const response_body = reader.allocRemaining(self.allocator, @enumFromInt(1024 * 1024)) catch return error.HttpRequestFailed;
                     return response_body;
                 },
                 .wait_ms => |ms| {

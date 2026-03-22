@@ -18,9 +18,11 @@ pub fn main() !void {
     defer app.deinit();
 
     app.run() catch |err| {
-        var stderr_buf: [256]u8 = undefined;
-        var stderr_w = std.fs.File.stderr().writer(&stderr_buf);
-        stderr_w.interface.print("zlack error: {}\n", .{err}) catch {};
+        const msg = @errorName(err);
+        const stderr = std.fs.File.stderr();
+        _ = stderr.write("zlack error: ") catch {};
+        _ = stderr.write(msg) catch {};
+        _ = stderr.write("\n") catch {};
         std.process.exit(1);
     };
 }

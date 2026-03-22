@@ -111,7 +111,15 @@ pub const App = struct {
     /// 3. Fetch channels and users
     /// 4. Connect Socket Mode
     /// 5. Run TUI event loop
+    fn logStep(msg: []const u8) void {
+        const stderr = std.fs.File.stderr();
+        _ = stderr.write("[zlack] ") catch {};
+        _ = stderr.write(msg) catch {};
+        _ = stderr.write("\n") catch {};
+    }
+
     pub fn run(self: *App) !void {
+        logStep("Step 1: Authentication");
         // --- Step 1: Authentication ---
         const kc = Auth.KeychainIf{
             .save = &keychainSave,
@@ -125,9 +133,11 @@ pub const App = struct {
 
         if (self.auth == null) {
             self.auth = Auth.promptForTokens(self.allocator) catch |err| {
-                var stderr_buf: [256]u8 = undefined;
-                var stderr_w = std.fs.File.stderr().writer(&stderr_buf);
-                stderr_w.interface.print("Authentication failed: {}\n", .{err}) catch {};
+                const name = @errorName(err);
+                const stderr = std.fs.File.stderr();
+                _ = stderr.write("Authentication failed: ") catch {};
+                _ = stderr.write(name) catch {};
+                _ = stderr.write("\n") catch {};
                 return err;
             };
             // Save to keychain
@@ -137,14 +147,18 @@ pub const App = struct {
         }
 
         const a = self.auth.?;
+        logStep("Step 1: Auth OK");
 
         // --- Step 2: Initialize Slack client ---
+        logStep("Step 2: Init Slack client");
         self.slack_client = SlackClient.init(self.allocator, a.user_token, a.app_token);
 
         // --- Step 3: Initialize database ---
+        logStep("Step 3: Init database");
         self.db = Database.initInMemory(self.allocator) catch null;
 
         // --- Step 4: Initialize TUI ---
+        logStep("Step 4: Init TUI");
         self.tty = try vaxis.Tty.init(&self.tty_buf);
         const tty_writer = self.tty.?.writer();
         try self.vx.enterAltScreen(tty_writer);
@@ -159,19 +173,23 @@ pub const App = struct {
         if (initial_winsize) |ws| {
             try self.vx.resize(self.allocator, tty_writer, ws);
         }
+        logStep("Step 4: TUI OK");
 
         // --- Step 5: Fetch channels and users, show loading ---
+        logStep("Step 5: Fetch channels");
         self.renderLoadingScreen("zlack を起動中... チャンネル一覧を取得しています");
 
         const api_channels = self.slack_client.?.conversationsList() catch &.{};
         self.populateChannels(api_channels);
 
+        logStep("Step 5: Fetch users");
         self.renderLoadingScreen("zlack を起動中... ユーザー一覧を取得しています");
 
         const api_users = self.slack_client.?.usersList() catch &.{};
         self.populateUsers(api_users);
 
         // --- Step 6: Socket Mode connection ---
+        logStep("Step 6: Socket Mode");
         self.renderLoadingScreen("zlack を起動中... WebSocket に接続しています");
 
         const wss_url = self.slack_client.?.appsConnectionsOpen() catch null;
@@ -190,6 +208,7 @@ pub const App = struct {
         }
 
         // --- Step 7: Update sidebar and enter main loop ---
+        logStep("Step 7: Enter main loop");
         self.updateSidebar();
         self.tui_root.workspace_name = "zlack";
 
