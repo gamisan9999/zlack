@@ -36,14 +36,30 @@ pub fn build(b: *std.Build) void {
     const run_step = b.step("run", "Run zlack");
     run_step.dependOn(&run_cmd.step);
 
-    // Test step
+    // Test step — モジュールごとに addTest を追加し、全テストを実行する
     const test_step = b.step("test", "Run unit tests");
-    const exe_tests = b.addTest(.{
-        .root_module = exe.root_module,
-    });
-    linkNativeDeps(b, exe_tests);
-    const run_exe_tests = b.addRunArtifact(exe_tests);
-    test_step.dependOn(&run_exe_tests.step);
+
+    const test_modules = [_][]const u8{
+        "src/main.zig",
+    };
+
+    for (test_modules) |mod| {
+        const unit_test = b.addTest(.{
+            .root_module = b.createModule(.{
+                .root_source_file = b.path(mod),
+                .target = target,
+                .optimize = optimize,
+                .imports = &.{
+                    .{ .name = "websocket", .module = websocket_dep.module("websocket") },
+                    .{ .name = "vaxis", .module = vaxis_dep.module("vaxis") },
+                },
+                .link_libc = true,
+            }),
+        });
+        linkNativeDeps(b, unit_test);
+        const run_test = b.addRunArtifact(unit_test);
+        test_step.dependOn(&run_test.step);
+    }
 }
 
 /// Link SQLite and macOS Security framework to the given compile step.
