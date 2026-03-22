@@ -130,10 +130,8 @@ pub const SocketClient = struct {
             .percent_encoded => |p| p,
         };
 
-        const is_tls = if (uri.scheme) |s|
-            std.mem.eql(u8, s, "wss") or std.mem.eql(u8, s, "https")
-        else
-            false;
+        const scheme = uri.scheme;
+        const is_tls = std.mem.eql(u8, scheme, "wss") or std.mem.eql(u8, scheme, "https");
         const port: u16 = if (uri.port) |p| p else if (is_tls) 443 else 80;
 
         var client = try websocket.Client.init(self.allocator, .{

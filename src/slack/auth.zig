@@ -108,18 +108,27 @@ pub const Auth = struct {
     /// Postconditions:
     ///   - Returns Auth with validated tokens and team_id/user_id from Slack
     pub fn promptForTokens(allocator: Allocator) !Auth {
-        const stdin = std.io.getStdIn().reader();
-        const stdout = std.io.getStdOut().writer();
+        const stdout_file = std.fs.File.stdout();
+        var stdout_buf: [1024]u8 = undefined;
+        var stdout_w = stdout_file.writer(&stdout_buf);
+        const stdout = &stdout_w.interface;
 
-        try stdout.writeAll("Enter User Token (xoxp-...): ");
-        const user_token = try stdin.readUntilDelimiterAlloc(allocator, '\n', 4096);
+        const stdin_file = std.fs.File.stdin();
+        var stdin_buf: [4096]u8 = undefined;
+        var stdin_r = stdin_file.reader(&stdin_buf);
+        const stdin = &stdin_r.interface;
+
+        stdout.writeAll("Enter User Token (xoxp-...): ") catch return error.EmptyToken;
+        stdout.flush() catch {};
+        const user_token = stdin.allocRemaining(allocator, @enumFromInt(4096)) catch return error.EmptyToken;
         errdefer allocator.free(user_token);
 
         const trimmed_user = std.mem.trimRight(u8, user_token, "\r\n ");
         try validateUserToken(trimmed_user);
 
-        try stdout.writeAll("Enter App Token (xapp-...): ");
-        const app_token = try stdin.readUntilDelimiterAlloc(allocator, '\n', 4096);
+        stdout.writeAll("Enter App Token (xapp-...): ") catch return error.EmptyToken;
+        stdout.flush() catch {};
+        const app_token = stdin.allocRemaining(allocator, @enumFromInt(4096)) catch return error.EmptyToken;
         errdefer allocator.free(app_token);
 
         const trimmed_app = std.mem.trimRight(u8, app_token, "\r\n ");

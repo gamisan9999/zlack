@@ -116,7 +116,7 @@ pub const SlackClient = struct {
         return parsed.value;
     }
 
-    pub fn conversationsList(self: *SlackClient) ![]types.Channel {
+    pub fn conversationsList(self: *SlackClient) ![]const types.Channel {
         const Context = struct {
             client: *SlackClient,
             fn fetch(ctx: @This(), cursor: ?[]const u8) anyerror!types.ConversationsListResponse {
@@ -220,7 +220,7 @@ pub const SlackClient = struct {
         parsed.deinit();
     }
 
-    pub fn usersList(self: *SlackClient) ![]types.User {
+    pub fn usersList(self: *SlackClient) ![]const types.User {
         const Context = struct {
             client: *SlackClient,
             fn fetch(ctx: @This(), cursor: ?[]const u8) anyerror!types.UsersListResponse {
@@ -309,32 +309,39 @@ pub const SlackClient = struct {
         while (true) {
             const uri = std.Uri.parse(url_str) catch return error.JsonParseFailed;
 
-            var header_buf: [4096]u8 = undefined;
-            var req = self.http_client.open(.POST, uri, .{
-                .server_header_buffer = &header_buf,
-                .extra_headers = &.{
-                    .{ .name = "Authorization", .value = auth_str },
-                    .{ .name = "Content-Type", .value = "application/x-www-form-urlencoded" },
+            var req = self.http_client.request(.POST, uri, .{
+                .headers = .{
+                    .authorization = .{ .override = auth_str },
+                    .content_type = .{ .override = "application/x-www-form-urlencoded" },
                 },
+                .redirect_behavior = .unhandled,
             }) catch return error.JsonParseFailed;
             defer req.deinit();
 
+            // Send body
+            var send_buf: [4096]u8 = undefined;
             req.transfer_encoding = .{ .content_length = body_buf.items.len };
-            req.send() catch return error.JsonParseFailed;
-            req.writeAll(body_buf.items) catch return error.JsonParseFailed;
-            req.finish() catch return error.JsonParseFailed;
-            req.wait() catch return error.JsonParseFailed;
+            var bw = req.sendBodyUnflushed(&send_buf) catch return error.JsonParseFailed;
+            bw.writer.end = body_buf.items.len;
+            bw.end() catch return error.JsonParseFailed;
+            req.connection.?.flush() catch return error.JsonParseFailed;
 
-            const status: u16 = @intFromEnum(req.status);
+            // Receive response head
+            var redirect_buf: [1]u8 = undefined;
+            var response = req.receiveHead(&redirect_buf) catch return error.JsonParseFailed;
+
+            const status: u16 = @intFromEnum(response.head.status);
 
             const action = shouldRetry(status, attempt, null);
             switch (action) {
                 .success => {
-                    const response_body = req.reader().readAllAlloc(self.allocator, 1024 * 1024) catch return error.JsonParseFailed;
+                    var transfer_buf: [8192]u8 = undefined;
+                    const body_reader = response.reader(&transfer_buf);
+                    const response_body = body_reader.allocRemaining(self.allocator, @enumFromInt(1024 * 1024)) catch return error.JsonParseFailed;
                     return response_body;
                 },
                 .wait_ms => |ms| {
-                    std.time.sleep(ms * std.time.ns_per_ms);
+                    std.Thread.sleep(ms * std.time.ns_per_ms);
                     attempt += 1;
                     continue;
                 },
