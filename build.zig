@@ -51,6 +51,8 @@ pub fn build(b: *std.Build) void {
         "src/store/cache.zig",
         "src/tui/mrkdwn.zig",
         "src/tui/root.zig",
+        "src/tui/input.zig",
+        "src/tui/messages.zig",
     };
 
     for (test_modules) |mod| {

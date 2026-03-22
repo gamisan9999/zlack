@@ -11,15 +11,16 @@ concurrency:
 
 jobs:
   fmt:
-    name: zig fmt
+    name: Format check
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: mlugg/setup-zig@v2
       - run: zig fmt --check .
 
-  build:
-    name: Build (${{ matrix.os }})
+  test:
+    name: Test (${{ matrix.os }})
+    needs: fmt
     strategy:
       fail-fast: false
       matrix:
@@ -31,7 +32,40 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libsqlite3-dev
       - uses: mlugg/setup-zig@v2
-      - name: Build
+      - name: Build (debug)
         run: zig build
       - name: Test
         run: zig build test --summary all
+
+  release-build:
+    name: Release (${{ matrix.target }})
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-macos
+            os: macos-latest
+          - target: x86_64-macos
+            os: macos-13
+          - target: x86_64-linux
+            os: ubuntu-latest
+          - target: aarch64-linux
+            os: ubuntu-latest
+          - target: x86_64-windows
+            os: ubuntu-latest
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install SQLite (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libsqlite3-dev
+      - uses: mlugg/setup-zig@v2
+      - name: Build (ReleaseSafe)
+        run: zig build -Doptimize=ReleaseSafe -Dtarget=${{ matrix.target }}
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: zlack-${{ matrix.target }}
+          path: zig-out/bin/zlack*
+          if-no-files-found: warn
