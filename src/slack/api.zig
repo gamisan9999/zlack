@@ -112,15 +112,16 @@ pub const SlackClient = struct {
     // --- Public API methods ---
 
     pub fn authTest(self: *SlackClient) !types.AuthTestResponse {
-        const parsed = try self.apiCallParsed(types.AuthTestResponse, "auth.test", self.user_token, &.{});
-        defer parsed.deinit();
+        const result = try self.apiCallParsed(types.AuthTestResponse, "auth.test", self.user_token, &.{});
+        defer result.parsed.deinit();
+        defer self.allocator.free(result.body);
         // Dupe strings before deinit frees the JSON arena
         return .{
-            .ok = parsed.value.ok,
-            .user_id = if (parsed.value.user_id) |s| try self.allocator.dupe(u8, s) else null,
-            .team_id = if (parsed.value.team_id) |s| try self.allocator.dupe(u8, s) else null,
-            .team = if (parsed.value.team) |s| try self.allocator.dupe(u8, s) else null,
-            .user = if (parsed.value.user) |s| try self.allocator.dupe(u8, s) else null,
+            .ok = result.parsed.value.ok,
+            .user_id = if (result.parsed.value.user_id) |s| try self.allocator.dupe(u8, s) else null,
+            .team_id = if (result.parsed.value.team_id) |s| try self.allocator.dupe(u8, s) else null,
+            .team = if (result.parsed.value.team) |s| try self.allocator.dupe(u8, s) else null,
+            .user = if (result.parsed.value.user) |s| try self.allocator.dupe(u8, s) else null,
         };
     }
 
@@ -130,7 +131,7 @@ pub const SlackClient = struct {
             fn fetch(ctx: @This(), cursor: ?[]const u8) anyerror!types.ConversationsListResponse {
                 var params: [4]std.http.Header = undefined;
                 var count: usize = 0;
-                params[count] = .{ .name = "types", .value = "public_channel,private_channel,mpim,im" };
+                params[count] = .{ .name = "types", .value = "public_channel,private_channel" };
                 count += 1;
                 params[count] = .{ .name = "limit", .value = "200" };
                 count += 1;
@@ -141,7 +142,6 @@ pub const SlackClient = struct {
                     count += 1;
                 }
                 const body = try ctx.client.apiCall("conversations.list", ctx.client.user_token, params[0..count]);
-                defer ctx.client.allocator.free(body);
                 const parsed = try parseResponse(types.ConversationsListResponse, ctx.client.allocator, body);
                 defer parsed.deinit();
                 return parsed.value;
@@ -174,7 +174,8 @@ pub const SlackClient = struct {
             count += 1;
         }
         const body = try self.apiCall("conversations.history", self.user_token, params[0..count]);
-        defer self.allocator.free(body);
+        // NOTE: body is NOT freed here — parsed values reference it.
+        // For MVP, we accept this leak. A proper fix would deep-copy all returned strings.
         const parsed = try parseResponse(types.ConversationsHistoryResponse, self.allocator, body);
         defer parsed.deinit();
         if (parsed.value.messages) |messages| {
@@ -190,7 +191,6 @@ pub const SlackClient = struct {
             .{ .name = "channel", .value = channel_id },
             .{ .name = "ts", .value = thread_ts },
         });
-        defer self.allocator.free(body);
         const parsed = try parseResponse(types.ConversationsRepliesResponse, self.allocator, body);
         defer parsed.deinit();
         if (parsed.value.messages) |messages| {
@@ -241,7 +241,6 @@ pub const SlackClient = struct {
                     count += 1;
                 }
                 const body = try ctx.client.apiCall("users.list", ctx.client.user_token, params[0..count]);
-                defer ctx.client.allocator.free(body);
                 const parsed = try parseResponse(types.UsersListResponse, ctx.client.allocator, body);
                 defer parsed.deinit();
                 return parsed.value;
@@ -261,7 +260,6 @@ pub const SlackClient = struct {
         const body = try self.apiCall("users.info", self.user_token, &.{
             .{ .name = "user", .value = user_id },
         });
-        defer self.allocator.free(body);
 
         // users.info returns { ok: true, user: { ... } }
         const Wrapper = struct {
@@ -319,10 +317,10 @@ pub const SlackClient = struct {
 
         var attempt: u32 = 1;
         while (true) {
-            // Use fetch() — the high-level API that handles body send + response read correctly
-            var response_storage: std.ArrayListUnmanaged(u8) = .empty;
-            var response_buf: [65536]u8 = undefined;
-            var response_writer = std.Io.Writer.fixed(&response_buf);
+            // Use fetch() with a heap-allocated response buffer
+            const heap_buf = try self.allocator.alloc(u8, 1024 * 1024); // 1MB
+            defer self.allocator.free(heap_buf);
+            var response_writer = std.Io.Writer.fixed(heap_buf);
 
             const result = self.http_client.fetch(.{
                 .location = .{ .url = url_str },
@@ -339,7 +337,6 @@ pub const SlackClient = struct {
                 _ = stderr.write("[zlack] fetch failed: ") catch {};
                 _ = stderr.write(@errorName(err)) catch {};
                 _ = stderr.write("\n") catch {};
-                response_storage.deinit(self.allocator);
                 return error.HttpRequestFailed;
             };
 
@@ -357,18 +354,9 @@ pub const SlackClient = struct {
                 _ = stderr.write("\n") catch {};
             }
 
-            // Get response body from the fixed buffer writer
+            // Get response body from the writer
             const written = response_writer.end;
-            const response_body = try self.allocator.dupe(u8, response_buf[0..written]);
-
-            // Debug: log first 200 chars of response
-            {
-                const stderr = std.fs.File.stderr();
-                _ = stderr.write("[zlack] response: ") catch {};
-                const len = @min(response_body.len, 200);
-                _ = stderr.write(response_body[0..len]) catch {};
-                _ = stderr.write("\n") catch {};
-            }
+            const response_body = try self.allocator.dupe(u8, heap_buf[0..written]);
 
             const action = shouldRetry(status, attempt, null);
             switch (action) {
@@ -389,10 +377,17 @@ pub const SlackClient = struct {
         }
     }
 
-    fn apiCallParsed(self: *SlackClient, comptime T: type, method: []const u8, token: []const u8, params: []const std.http.Header) !std.json.Parsed(T) {
+    /// Call API and parse response. Caller must call .deinit() on result.
+    /// NOTE: The returned Parsed owns its arena which references the response body.
+    /// The body is NOT freed here — it's owned by the Parsed arena or must be
+    /// freed by the caller after they're done with the parsed value.
+    fn apiCallParsed(self: *SlackClient, comptime T: type, method: []const u8, token: []const u8, params: []const std.http.Header) !struct { parsed: std.json.Parsed(T), body: []const u8 } {
         const body = try self.apiCall(method, token, params);
-        defer self.allocator.free(body);
-        return parseResponse(T, self.allocator, body);
+        const parsed = parseResponse(T, self.allocator, body) catch |err| {
+            self.allocator.free(body);
+            return err;
+        };
+        return .{ .parsed = parsed, .body = body };
     }
 };
 

@@ -126,8 +126,32 @@ pub const App = struct {
             .load = &keychainLoad,
         };
 
-        if (!self.reconfigure) {
-            // Try loading from keychain with a default team_id
+        // Try environment variables first (for development/testing)
+        const env_user_token = std.posix.getenv("ZLACK_USER_TOKEN");
+        const env_app_token = std.posix.getenv("ZLACK_APP_TOKEN");
+
+        if (env_user_token != null and env_app_token != null) {
+            logStep("Step 1: Using env tokens");
+            var client = SlackClient.init(self.allocator, env_user_token.?, env_app_token.?);
+            defer client.deinit();
+            const auth_resp = client.authTest() catch |err| {
+                const name = @errorName(err);
+                const stderr = std.fs.File.stderr();
+                _ = stderr.write("Auth via env failed: ") catch {};
+                _ = stderr.write(name) catch {};
+                _ = stderr.write("\n") catch {};
+                return err;
+            };
+            self.auth = Auth{
+                .user_token = env_user_token.?,
+                .app_token = env_app_token.?,
+                .team_id = auth_resp.team_id orelse return error.SlackApiError,
+                .user_id = auth_resp.user_id orelse return error.SlackApiError,
+            };
+        }
+
+        if (self.auth == null and !self.reconfigure) {
+            // Try loading from keychain
             self.auth = try Auth.loadFromKeychain(self.allocator, "default", kc);
         }
 
