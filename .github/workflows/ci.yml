@@ -51,7 +51,7 @@ jobs:
   release-macos-x64:
     name: Release (macos-x64)
     needs: release-macos-arm64
-    runs-on: macos-13
+    runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
       - uses: mlugg/setup-zig@v2
