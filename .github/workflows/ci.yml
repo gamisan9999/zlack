@@ -3,6 +3,7 @@ name: CI
 on:
   push:
     branches: [main]
+    tags: ['v*']
   pull_request:
 
 jobs:
@@ -14,63 +15,73 @@ jobs:
       - uses: mlugg/setup-zig@v2
       - run: zig fmt --check .
 
-  test-linux:
-    name: Test (Linux)
+  test:
+    name: Test (${{ matrix.name }})
     needs: fmt
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux
+            os: ubuntu-latest
+          - name: macOS
+            os: macos-latest
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-      - run: sudo apt-get update && sudo apt-get install -y libsqlite3-dev
+      - name: Install SQLite (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libsqlite3-dev
       - uses: mlugg/setup-zig@v2
       - run: zig build
       - run: zig build test --summary all
 
-  test-macos:
-    name: Test (macOS)
-    needs: fmt
-    runs-on: macos-latest
+  release-build:
+    name: Release (${{ matrix.name }})
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macos-arm64
+            os: macos-latest
+          - name: macos-x64
+            os: macos-14
+          - name: linux-x64
+            os: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-      - uses: mlugg/setup-zig@v2
-      - run: zig build
-      - run: zig build test --summary all
-
-  release-macos-arm64:
-    name: Release (macos-arm64)
-    needs: [test-linux, test-macos]
-    runs-on: macos-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: mlugg/setup-zig@v2
-      - run: zig build -Doptimize=ReleaseSafe
-      - uses: actions/upload-artifact@v4
-        with:
-          name: zlack-macos-arm64
-          path: zig-out/bin/zlack*
-
-  release-macos-x64:
-    name: Release (macos-x64)
-    needs: release-macos-arm64
-    runs-on: macos-14
-    steps:
-      - uses: actions/checkout@v4
+      - name: Install SQLite (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libsqlite3-dev
       - uses: mlugg/setup-zig@v2
       - run: zig build -Doptimize=ReleaseSafe
+      - name: Package
+        run: tar czf zlack-${{ matrix.name }}.tar.gz -C zig-out/bin zlack
       - uses: actions/upload-artifact@v4
         with:
-          name: zlack-macos-x64
-          path: zig-out/bin/zlack*
+          name: zlack-${{ matrix.name }}
+          path: zlack-${{ matrix.name }}.tar.gz
 
-  release-linux:
-    name: Release (linux-x64)
-    needs: release-macos-x64
+  publish-release:
+    name: Publish Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: release-build
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
-      - uses: actions/checkout@v4
-      - run: sudo apt-get update && sudo apt-get install -y libsqlite3-dev
-      - uses: mlugg/setup-zig@v2
-      - run: zig build -Doptimize=ReleaseSafe
-      - uses: actions/upload-artifact@v4
+      - uses: actions/download-artifact@v4
         with:
-          name: zlack-linux-x64
-          path: zig-out/bin/zlack*
+          path: artifacts
+          merge-multiple: true
+      - name: Create Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ github.ref_name }}" \
+            artifacts/*.tar.gz \
+            --repo "${{ github.repository }}" \
+            --title "${{ github.ref_name }}" \
+            --generate-notes
