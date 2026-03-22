@@ -2,7 +2,7 @@
 
 Cliente Slack leve para o terminal, construído com Zig.
 
-**~6.700 linhas de Zig / 5,5MB de binário / zero dependências em tempo de execução**
+Inicialização instantânea. Binário único. Sem Electron.
 
 [English](README.md) | [日本語](README.ja.md) | [简体中文](README.zh.md) | Português (BR)
 

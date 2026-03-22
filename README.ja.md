@@ -2,7 +2,7 @@
 
 ターミナルで動く軽量 Slack クライアント。Zig で構築。
 
-**約 6,700 行の Zig / 5.5MB バイナリ / ランタイム依存ゼロ**
+一瞬で起動。バイナリ1つ。Electron 不要。
 
 [English](README.md) | 日本語 | [简体中文](README.zh.md) | [Português (BR)](README.pt-BR.md)
 

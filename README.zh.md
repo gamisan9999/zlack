@@ -2,7 +2,7 @@
 
 终端轻量级 Slack 客户端，使用 Zig 构建。
 
-**约 6,700 行 Zig 代码 / 5.5MB 二进制文件 / 零运行时依赖**
+瞬间启动。单一二进制文件。无需 Electron。
 
 [English](README.md) | [日本語](README.ja.md) | 简体中文 | [Português (BR)](README.pt-BR.md)
 
