@@ -306,7 +306,9 @@ pub const SlackClient = struct {
         var auth_buf: [256]u8 = undefined;
         const auth_str = std.fmt.bufPrint(&auth_buf, "Bearer {s}", .{token}) catch return error.JsonParseFailed;
 
-        const payload: ?[]const u8 = if (form_body.items.len > 0) form_body.items else null;
+        // Always send a body for POST — fetch() calls sendBodiless() for null payload,
+        // which panics on POST (requestHasBody() == true).
+        const payload: []const u8 = if (form_body.items.len > 0) form_body.items else "";
 
         var attempt: u32 = 1;
         while (true) {
