@@ -4,7 +4,7 @@
 
 **約 6,700 行の Zig / 5.5MB バイナリ / ランタイム依存ゼロ**
 
-[English](README.md) | 日本語 | [简体中文](README.zh.md)
+[English](README.md) | 日本語 | [简体中文](README.zh.md) | [Português (BR)](README.pt-BR.md)
 
 ## 機能
 

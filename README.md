@@ -4,7 +4,7 @@ A lightweight Slack client for the terminal, built with Zig.
 
 **~6,700 lines of Zig / 5.5MB binary / zero runtime dependencies**
 
-English | [日本語](README.ja.md) | [简体中文](README.zh.md)
+English | [日本語](README.ja.md) | [简体中文](README.zh.md) | [Português (BR)](README.pt-BR.md)
 
 ## Features
 

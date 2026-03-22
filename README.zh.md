@@ -4,7 +4,7 @@
 
 **约 6,700 行 Zig 代码 / 5.5MB 二进制文件 / 零运行时依赖**
 
-[English](README.md) | [日本語](README.ja.md) | 简体中文
+[English](README.md) | [日本語](README.ja.md) | 简体中文 | [Português (BR)](README.pt-BR.md)
 
 ## 功能
 
