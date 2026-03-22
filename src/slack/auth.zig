@@ -113,14 +113,9 @@ pub const Auth = struct {
         var stdout_w = stdout_file.writer(&stdout_buf);
         const stdout = &stdout_w.interface;
 
-        const stdin_file = std.fs.File.stdin();
-        var stdin_buf: [4096]u8 = undefined;
-        var stdin_r = stdin_file.reader(&stdin_buf);
-        const stdin = &stdin_r.interface;
-
         stdout.writeAll("Enter User Token (xoxp-...): ") catch return error.EmptyToken;
         stdout.flush() catch {};
-        const user_token = stdin.allocRemaining(allocator, @enumFromInt(4096)) catch return error.EmptyToken;
+        const user_token = try readLine(allocator);
         errdefer allocator.free(user_token);
 
         const trimmed_user = std.mem.trimRight(u8, user_token, "\r\n ");
@@ -128,7 +123,7 @@ pub const Auth = struct {
 
         stdout.writeAll("Enter App Token (xapp-...): ") catch return error.EmptyToken;
         stdout.flush() catch {};
-        const app_token = stdin.allocRemaining(allocator, @enumFromInt(4096)) catch return error.EmptyToken;
+        const app_token = try readLine(allocator);
         errdefer allocator.free(app_token);
 
         const trimmed_app = std.mem.trimRight(u8, app_token, "\r\n ");
@@ -176,6 +171,28 @@ pub const Auth = struct {
         if (token.len == 0) return error.EmptyToken;
         if (token.len < min_token_len) return error.TokenTooShort;
         if (!std.mem.startsWith(u8, token, app_token_prefix)) return error.InvalidTokenFormat;
+    }
+
+    /// Read a single line from stdin. Returns owned slice (caller must free).
+    /// Reads byte-by-byte until newline or EOF.
+    fn readLine(allocator: Allocator) ![]u8 {
+        var line: std.ArrayListUnmanaged(u8) = .empty;
+        errdefer line.deinit(allocator);
+
+        const stdin_file = std.fs.File.stdin();
+
+        while (true) {
+            var byte: [1]u8 = undefined;
+            const n = stdin_file.read(&byte) catch break;
+            if (n == 0) break; // EOF
+            if (byte[0] == '\n') {
+                line.append(allocator, '\n') catch {};
+                break;
+            }
+            try line.append(allocator, byte[0]);
+        }
+
+        return try line.toOwnedSlice(allocator);
     }
 
     /// Build Keychain service name for user token.
