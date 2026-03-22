@@ -42,6 +42,7 @@ pub fn build(b: *std.Build) void {
     const test_modules = [_][]const u8{
         "src/main.zig",
         "src/store/db.zig",
+        "src/slack/types.zig",
     };
 
     for (test_modules) |mod| {
