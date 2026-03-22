@@ -319,16 +319,15 @@ pub const SlackClient = struct {
             }) catch return error.HttpRequestFailed;
             defer req.deinit();
 
-            // Send body (following fetch pattern from Zig stdlib)
-            if (payload) |p| {
-                req.transfer_encoding = .{ .content_length = p.len };
-                var body_writer = req.sendBodyUnflushed(&.{}) catch return error.HttpRequestFailed;
-                body_writer.writer.writeAll(p) catch return error.HttpRequestFailed;
-                body_writer.end() catch return error.HttpRequestFailed;
-                if (req.connection) |conn| conn.flush() catch return error.HttpRequestFailed;
-            } else {
-                req.sendBodiless() catch return error.HttpRequestFailed;
+            // Send body — POST always needs a body, even if empty
+            const body_content = payload orelse "";
+            req.transfer_encoding = .{ .content_length = body_content.len };
+            var body_writer = req.sendBodyUnflushed(&.{}) catch return error.HttpRequestFailed;
+            if (body_content.len > 0) {
+                body_writer.writer.writeAll(body_content) catch return error.HttpRequestFailed;
             }
+            body_writer.end() catch return error.HttpRequestFailed;
+            if (req.connection) |conn| conn.flush() catch return error.HttpRequestFailed;
 
             // Receive response
             var response = req.receiveHead(&.{}) catch return error.HttpRequestFailed;
