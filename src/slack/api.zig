@@ -56,6 +56,7 @@ pub fn shouldRetry(status_code: u16, attempt: u32, retry_after_header: ?[]const 
 pub const ApiError = error{
     SlackApiError,
     JsonParseFailed,
+    HttpRequestFailed,
 };
 
 /// Parse a Slack API JSON response into the given type.
@@ -320,18 +321,37 @@ pub const SlackClient = struct {
             defer req.deinit();
 
             // Send body — POST always needs a body, even if empty
+            var send_buf: [4096]u8 = undefined;
             const body_content = payload orelse "";
             req.transfer_encoding = .{ .content_length = body_content.len };
-            var body_writer = req.sendBodyUnflushed(&.{}) catch return error.HttpRequestFailed;
+            var bw = req.sendBodyUnflushed(&send_buf) catch return error.HttpRequestFailed;
             if (body_content.len > 0) {
-                body_writer.writer.writeAll(body_content) catch return error.HttpRequestFailed;
+                bw.writer.writeAll(body_content) catch return error.HttpRequestFailed;
             }
-            body_writer.end() catch return error.HttpRequestFailed;
+            bw.end() catch return error.HttpRequestFailed;
             if (req.connection) |conn| conn.flush() catch return error.HttpRequestFailed;
 
             // Receive response
-            var response = req.receiveHead(&.{}) catch return error.HttpRequestFailed;
+            var response = req.receiveHead(&.{}) catch |err| {
+                const stderr = std.fs.File.stderr();
+                _ = stderr.write("[zlack] receiveHead failed: ") catch {};
+                _ = stderr.write(@errorName(err)) catch {};
+                _ = stderr.write("\n") catch {};
+                return error.HttpRequestFailed;
+            };
             const status: u16 = @intFromEnum(response.head.status);
+
+            // Debug: log status
+            {
+                const stderr = std.fs.File.stderr();
+                _ = stderr.write("[zlack] HTTP ") catch {};
+                var status_buf: [8]u8 = undefined;
+                const status_str = std.fmt.bufPrint(&status_buf, "{d}", .{status}) catch "???";
+                _ = stderr.write(status_str) catch {};
+                _ = stderr.write(" for ") catch {};
+                _ = stderr.write(method) catch {};
+                _ = stderr.write("\n") catch {};
+            }
 
             const action = shouldRetry(status, attempt, null);
             switch (action) {
@@ -339,7 +359,21 @@ pub const SlackClient = struct {
                     // Read response body
                     var transfer_buf: [8192]u8 = undefined;
                     const reader = response.reader(&transfer_buf);
-                    const response_body = reader.allocRemaining(self.allocator, @enumFromInt(1024 * 1024)) catch return error.HttpRequestFailed;
+                    const response_body = reader.allocRemaining(self.allocator, @enumFromInt(1024 * 1024)) catch |err| {
+                        const stderr = std.fs.File.stderr();
+                        _ = stderr.write("[zlack] body read failed: ") catch {};
+                        _ = stderr.write(@errorName(err)) catch {};
+                        _ = stderr.write("\n") catch {};
+                        return error.HttpRequestFailed;
+                    };
+                    // Debug: log first 200 chars of response
+                    {
+                        const stderr = std.fs.File.stderr();
+                        _ = stderr.write("[zlack] response: ") catch {};
+                        const len = @min(response_body.len, 200);
+                        _ = stderr.write(response_body[0..len]) catch {};
+                        _ = stderr.write("\n") catch {};
+                    }
                     return response_body;
                 },
                 .wait_ms => |ms| {
