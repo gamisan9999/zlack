@@ -306,82 +306,76 @@ pub const SlackClient = struct {
         var auth_buf: [256]u8 = undefined;
         const auth_str = std.fmt.bufPrint(&auth_buf, "Bearer {s}", .{token}) catch return error.JsonParseFailed;
 
-        const uri = std.Uri.parse(url_str) catch return error.HttpRequestFailed;
         const payload: ?[]const u8 = if (form_body.items.len > 0) form_body.items else null;
 
         var attempt: u32 = 1;
         while (true) {
-            var req = std.http.Client.request(&self.http_client, .POST, uri, .{
-                .redirect_behavior = .unhandled,
+            // Use fetch() — the high-level API that handles body send + response read correctly
+            var response_storage: std.ArrayListUnmanaged(u8) = .empty;
+            var response_buf: [65536]u8 = undefined;
+            var response_writer = std.Io.Writer.fixed(&response_buf);
+
+            const result = self.http_client.fetch(.{
+                .location = .{ .url = url_str },
+                .method = .POST,
+                .payload = payload,
                 .headers = .{
                     .authorization = .{ .override = auth_str },
                     .content_type = .{ .override = "application/x-www-form-urlencoded" },
                 },
-            }) catch return error.HttpRequestFailed;
-            defer req.deinit();
-
-            // Send body — POST always needs a body, even if empty
-            var send_buf: [4096]u8 = undefined;
-            const body_content = payload orelse "";
-            req.transfer_encoding = .{ .content_length = body_content.len };
-            var bw = req.sendBodyUnflushed(&send_buf) catch return error.HttpRequestFailed;
-            if (body_content.len > 0) {
-                bw.writer.writeAll(body_content) catch return error.HttpRequestFailed;
-            }
-            bw.end() catch return error.HttpRequestFailed;
-            if (req.connection) |conn| conn.flush() catch return error.HttpRequestFailed;
-
-            // Receive response
-            var response = req.receiveHead(&.{}) catch |err| {
+                .response_writer = &response_writer,
+                .redirect_behavior = .unhandled,
+            }) catch |err| {
                 const stderr = std.fs.File.stderr();
-                _ = stderr.write("[zlack] receiveHead failed: ") catch {};
+                _ = stderr.write("[zlack] fetch failed: ") catch {};
                 _ = stderr.write(@errorName(err)) catch {};
                 _ = stderr.write("\n") catch {};
+                response_storage.deinit(self.allocator);
                 return error.HttpRequestFailed;
             };
-            const status: u16 = @intFromEnum(response.head.status);
+
+            const status: u16 = @intFromEnum(result.status);
 
             // Debug: log status
             {
                 const stderr = std.fs.File.stderr();
                 _ = stderr.write("[zlack] HTTP ") catch {};
-                var status_buf: [8]u8 = undefined;
-                const status_str = std.fmt.bufPrint(&status_buf, "{d}", .{status}) catch "???";
+                var status_str_buf: [8]u8 = undefined;
+                const status_str = std.fmt.bufPrint(&status_str_buf, "{d}", .{status}) catch "???";
                 _ = stderr.write(status_str) catch {};
                 _ = stderr.write(" for ") catch {};
                 _ = stderr.write(method) catch {};
                 _ = stderr.write("\n") catch {};
             }
 
+            // Get response body from the fixed buffer writer
+            const written = response_writer.end;
+            const response_body = try self.allocator.dupe(u8, response_buf[0..written]);
+
+            // Debug: log first 200 chars of response
+            {
+                const stderr = std.fs.File.stderr();
+                _ = stderr.write("[zlack] response: ") catch {};
+                const len = @min(response_body.len, 200);
+                _ = stderr.write(response_body[0..len]) catch {};
+                _ = stderr.write("\n") catch {};
+            }
+
             const action = shouldRetry(status, attempt, null);
             switch (action) {
                 .success => {
-                    // Read response body
-                    var transfer_buf: [8192]u8 = undefined;
-                    const reader = response.reader(&transfer_buf);
-                    const response_body = reader.allocRemaining(self.allocator, @enumFromInt(1024 * 1024)) catch |err| {
-                        const stderr = std.fs.File.stderr();
-                        _ = stderr.write("[zlack] body read failed: ") catch {};
-                        _ = stderr.write(@errorName(err)) catch {};
-                        _ = stderr.write("\n") catch {};
-                        return error.HttpRequestFailed;
-                    };
-                    // Debug: log first 200 chars of response
-                    {
-                        const stderr = std.fs.File.stderr();
-                        _ = stderr.write("[zlack] response: ") catch {};
-                        const len = @min(response_body.len, 200);
-                        _ = stderr.write(response_body[0..len]) catch {};
-                        _ = stderr.write("\n") catch {};
-                    }
                     return response_body;
                 },
                 .wait_ms => |ms| {
+                    self.allocator.free(response_body);
                     std.Thread.sleep(ms * std.time.ns_per_ms);
                     attempt += 1;
                     continue;
                 },
-                .give_up => return error.SlackApiError,
+                .give_up => {
+                    self.allocator.free(response_body);
+                    return error.SlackApiError;
+                },
             }
         }
     }
