@@ -45,6 +45,7 @@ pub fn build(b: *std.Build) void {
         "src/slack/types.zig",
         "src/slack/pagination.zig",
         "src/slack/api.zig",
+        "src/platform/keychain.zig",
     };
 
     for (test_modules) |mod| {
@@ -73,4 +74,5 @@ fn linkNativeDeps(b: *std.Build, step: *std.Build.Step.Compile) void {
         step.addFrameworkPath(.{ .cwd_relative = "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/Frameworks" });
     }
     step.linkFramework("Security");
+    step.linkFramework("CoreFoundation");
 }
