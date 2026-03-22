@@ -1,19 +1,26 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
 
-const c = @cImport({
-    @cInclude("Security/Security.h");
-});
-
 /// macOS Keychain wrapper using Security.framework.
-///
-/// Pre-conditions for all methods:
-///   - service, account must be non-empty slices
-/// Post-conditions:
-///   - save: item is stored (or updated) in the Keychain
-///   - load: returns owned slice (caller must free) or null if not found
-///   - delete: item is removed from Keychain (no-op if not found)
-pub const Keychain = struct {
+/// On non-macOS platforms, all operations return error/null (stub).
+pub const Keychain = if (builtin.os.tag == .macos) MacKeychain else StubKeychain;
+
+const StubKeychain = struct {
+    pub fn save(_: []const u8, _: []const u8, _: []const u8) !void {
+        return error.KeychainNotAvailable;
+    }
+    pub fn load(_: Allocator, _: []const u8, _: []const u8) !?[]const u8 {
+        return null;
+    }
+    pub fn delete(_: []const u8, _: []const u8) !void {}
+};
+
+const MacKeychain = struct {
+    const c = @cImport({
+        @cInclude("Security/Security.h");
+    });
+
     /// Save (or update) a password in the Keychain.
     pub fn save(service: []const u8, account: []const u8, password: []const u8) !void {
         const cf_service = cfStr(service) orelse return error.CFStringCreateFailed;
@@ -177,33 +184,30 @@ pub const Keychain = struct {
         if (status == c.errSecSuccess or status == c.errSecItemNotFound) return;
         return error.KeychainDeleteFailed;
     }
+
+    fn cfStr(s: []const u8) ?*const anyopaque {
+        const ref = c.CFStringCreateWithBytes(
+            null,
+            s.ptr,
+            @intCast(s.len),
+            c.kCFStringEncodingUTF8,
+            0,
+        ) orelse return null;
+        return @ptrCast(ref);
+    }
+
+    fn cfData(s: []const u8) ?*const anyopaque {
+        const ref = c.CFDataCreate(
+            null,
+            s.ptr,
+            @intCast(s.len),
+        ) orelse return null;
+        return @ptrCast(ref);
+    }
 };
 
-/// Create a CFStringRef from a Zig slice. Returns an opaque pointer for use
-/// in CFDictionary keys/values. Caller must CFRelease.
-fn cfStr(s: []const u8) ?*const anyopaque {
-    const ref = c.CFStringCreateWithBytes(
-        null,
-        s.ptr,
-        @intCast(s.len),
-        c.kCFStringEncodingUTF8,
-        0, // isExternalRepresentation = false
-    ) orelse return null;
-    return @ptrCast(ref);
-}
-
-/// Create a CFDataRef from a Zig slice. Caller must CFRelease.
-fn cfData(s: []const u8) ?*const anyopaque {
-    const ref = c.CFDataCreate(
-        null,
-        s.ptr,
-        @intCast(s.len),
-    ) orelse return null;
-    return @ptrCast(ref);
-}
-
 // ---------------------------------------------------------------------------
-// Tests -- run against the real macOS Keychain
+// Tests -- run against the real macOS Keychain (macOS only)
 // ---------------------------------------------------------------------------
 
 const testing = std.testing;
@@ -212,7 +216,7 @@ const test_service = "zlack.test.keychain";
 const test_account = "zlack.test.account";
 
 test "save then load returns correct value" {
-    // Clean up any leftover from previous test runs
+    if (builtin.os.tag != .macos) return error.SkipZigTest;
     Keychain.delete(test_service, test_account) catch {};
 
     try Keychain.save(test_service, test_account, "secret123");
@@ -225,7 +229,7 @@ test "save then load returns correct value" {
 }
 
 test "load non-existent key returns null" {
-    // Make sure it doesn't exist
+    if (builtin.os.tag != .macos) return error.SkipZigTest;
     Keychain.delete("zlack.test.nonexistent", "zlack.test.nouser") catch {};
 
     const result = try Keychain.load(testing.allocator, "zlack.test.nonexistent", "zlack.test.nouser");
@@ -233,6 +237,7 @@ test "load non-existent key returns null" {
 }
 
 test "save then delete then load returns null" {
+    if (builtin.os.tag != .macos) return error.SkipZigTest;
     Keychain.delete(test_service, test_account) catch {};
 
     try Keychain.save(test_service, test_account, "to_be_deleted");
@@ -243,6 +248,7 @@ test "save then delete then load returns null" {
 }
 
 test "save twice (update) then load returns new value" {
+    if (builtin.os.tag != .macos) return error.SkipZigTest;
     Keychain.delete(test_service, test_account) catch {};
 
     try Keychain.save(test_service, test_account, "old_value");
@@ -254,4 +260,10 @@ test "save twice (update) then load returns new value" {
     try testing.expect(result != null);
     defer testing.allocator.free(result.?);
     try testing.expectEqualStrings("new_value", result.?);
+}
+
+test "stub keychain load returns null" {
+    if (builtin.os.tag == .macos) return error.SkipZigTest;
+    const result = try Keychain.load(testing.allocator, "svc", "acct");
+    try testing.expect(result == null);
 }
