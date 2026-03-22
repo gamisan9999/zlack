@@ -44,6 +44,7 @@ pub fn build(b: *std.Build) void {
         "src/store/db.zig",
         "src/slack/types.zig",
         "src/slack/pagination.zig",
+        "src/slack/api.zig",
     };
 
     for (test_modules) |mod| {
