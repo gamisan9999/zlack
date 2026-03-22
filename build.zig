@@ -50,6 +50,7 @@ pub fn build(b: *std.Build) void {
         "src/slack/socket.zig",
         "src/store/cache.zig",
         "src/tui/mrkdwn.zig",
+        "src/tui/root.zig",
     };
 
     for (test_modules) |mod| {
