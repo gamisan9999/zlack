@@ -69,13 +69,12 @@ pub const Messages = struct {
             self.selected_idx = if (self.selected_idx > page) self.selected_idx - page else 0;
             return .none;
         }
-        // Enter: open thread if message has replies
+        // Enter: open thread for selected message
         if (key.matches(Key.enter, .{})) {
             const msg = self.messages[self.selected_idx];
-            if (msg.thread_ts) |tts| {
-                return .{ .open_thread = .{ .channel_id = self.channel_id, .thread_ts = tts } };
-            }
-            return .none;
+            // Use thread_ts if it's a reply, otherwise use ts as thread parent
+            const tts = msg.thread_ts orelse msg.ts;
+            return .{ .open_thread = .{ .channel_id = self.channel_id, .thread_ts = tts } };
         }
         return null;
     }

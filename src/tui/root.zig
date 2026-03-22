@@ -36,6 +36,7 @@ pub const Root = struct {
     pub const AppAction = union(enum) {
         select_channel: []const u8,
         send_message: struct { text: []const u8, thread_ts: ?[]const u8 },
+        send_also_channel: struct { text: []const u8, thread_ts: []const u8 },
         upload_file: []const u8,
         open_thread: struct { channel_id: []const u8, thread_ts: []const u8 },
         toggle_thread,
@@ -176,6 +177,12 @@ pub const Root = struct {
                             else
                                 null;
                             return .{ .send_message = .{ .text = text, .thread_ts = thread_ts } };
+                        },
+                        .send_message_also_channel => |text| {
+                            if (self.thread.parent_msg) |p| {
+                                return .{ .send_also_channel = .{ .text = text, .thread_ts = p.ts } };
+                            }
+                            return null;
                         },
                         .none => return null,
                     }

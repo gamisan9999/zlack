@@ -54,7 +54,12 @@ pub const App = struct {
     // Owned slices for TUI widget data (freed on update)
     sidebar_entries: ?[]Sidebar.ChannelEntry,
     message_entries: ?[]Messages.MessageEntry,
+    thread_entries: ?[]Messages.MessageEntry,
     modal_items: ?[]Modal.ModalItem,
+
+    // Double-click tracking
+    last_click_time: i64 = 0,
+    last_click_msg_idx: ?usize = null,
 
     pub fn init(allocator: Allocator, reconfigure: bool) !App {
         const vx = try vaxis.Vaxis.init(allocator, .{});
@@ -76,6 +81,7 @@ pub const App = struct {
             .reconfigure = reconfigure,
             .sidebar_entries = null,
             .message_entries = null,
+            .thread_entries = null,
             .modal_items = null,
         };
     }
@@ -100,6 +106,7 @@ pub const App = struct {
         // Clean up owned TUI data
         if (self.sidebar_entries) |entries| self.allocator.free(entries);
         if (self.message_entries) |entries| self.allocator.free(entries);
+        if (self.thread_entries) |entries| self.allocator.free(entries);
         if (self.modal_items) |items| self.allocator.free(items);
 
         // Clean up subsystems
@@ -280,9 +287,15 @@ pub const App = struct {
                             .send_message => |msg| {
                                 self.sendMessage(msg.text, msg.thread_ts);
                                 self.tui_root.input.clear();
-                                // Refresh messages after sending
                                 if (self.current_channel) |ch| {
-                                    self.selectChannel(ch);
+                                    self.refreshMessages(ch);
+                                }
+                            },
+                            .send_also_channel => |msg| {
+                                self.sendMessageBroadcast(msg.text, msg.thread_ts);
+                                self.tui_root.input.clear();
+                                if (self.current_channel) |ch| {
+                                    self.refreshMessages(ch);
                                 }
                             },
                             .upload_file => |path| {
@@ -290,10 +303,16 @@ pub const App = struct {
                                 self.tui_root.input.file_mode = false;
                                 self.tui_root.input.clear();
                             },
-                            .open_thread => |_| {
-                                // Thread loading would go here in a full implementation
+                            .open_thread => |t| {
+                                self.openThread(t.channel_id, t.thread_ts);
+                                self.tui_root.input.thread_mode = true;
+                                self.tui_root.focus = .input;
                             },
-                            .toggle_thread => {},
+                            .toggle_thread => {
+                                if (!self.tui_root.thread.visible) {
+                                    self.tui_root.input.thread_mode = false;
+                                }
+                            },
                             .switch_workspace => {},
                             .search_channel => {
                                 self.populateModalChannels();
@@ -328,6 +347,23 @@ pub const App = struct {
                         .thread_ts = msg.thread_ts,
                         .reply_count = 0,
                     });
+
+                    // Check for mention
+                    const is_mention = if (self.auth) |a|
+                        self.textContainsMention(msg.text, a.user_id)
+                    else
+                        false;
+
+                    // Mark channel as unread/mention in sidebar
+                    self.markChannelNotification(msg.channel_id, is_mention);
+
+                    // Ring terminal bell on mention
+                    if (is_mention) {
+                        if (self.tty) |*tty| {
+                            _ = tty.writer().writeAll("\x07") catch {};
+                        }
+                    }
+
                     // If this is the current channel, refresh messages
                     if (self.current_channel) |ch| {
                         if (std.mem.eql(u8, ch, msg.channel_id)) {
@@ -366,11 +402,26 @@ pub const App = struct {
     fn selectChannel(self: *App, channel_id: []const u8) void {
         self.current_channel = channel_id;
         self.tui_root.messages.channel_id = channel_id;
+        // Close thread when switching channels
+        self.tui_root.thread.hide();
+        self.tui_root.input.thread_mode = false;
+        // Clear unread/mention badge for this channel
+        if (self.sidebar_entries) |entries| {
+            for (entries) |*entry| {
+                if (std.mem.eql(u8, entry.id, channel_id)) {
+                    entry.has_unread = false;
+                    entry.has_mention = false;
+                    break;
+                }
+            }
+        }
+        self.refreshMessages(channel_id);
+    }
 
-        // Fetch history via REST API
+    /// Refresh messages without closing thread pane.
+    fn refreshMessages(self: *App, channel_id: []const u8) void {
         if (self.slack_client) |*client| {
             const api_messages = client.conversationsHistory(channel_id, .{}) catch &.{};
-            // Populate cache
             for (api_messages) |msg| {
                 self.cache.addMessage(channel_id, .{
                     .ts = msg.ts,
@@ -381,8 +432,65 @@ pub const App = struct {
                 });
             }
         }
-
         self.updateMessages(channel_id);
+    }
+
+    fn openThread(self: *App, channel_id: []const u8, thread_ts: []const u8) void {
+        {
+            const stderr = std.fs.File.stderr();
+            _ = stderr.write("[zlack] openThread: ch=") catch {};
+            _ = stderr.write(channel_id) catch {};
+            _ = stderr.write(" ts=") catch {};
+            _ = stderr.write(thread_ts) catch {};
+            _ = stderr.write("\n") catch {};
+        }
+        if (self.slack_client == null) return;
+        var client = &self.slack_client.?;
+
+        // Fetch replies
+        const api_replies = client.conversationsReplies(channel_id, thread_ts) catch &.{};
+        if (api_replies.len == 0) return;
+
+        // Free previous thread entries
+        if (self.thread_entries) |entries| self.allocator.free(entries);
+
+        const entries = self.allocator.alloc(Messages.MessageEntry, api_replies.len) catch return;
+        for (api_replies, 0..) |msg, i| {
+            const user_name = if (msg.user) |uid|
+                self.cache.getUserName(uid) orelse uid
+            else
+                "system";
+            entries[i] = .{
+                .ts = msg.ts,
+                .user_name = user_name,
+                .text = msg.text,
+                .thread_ts = msg.thread_ts,
+                .reply_count = if (msg.reply_count) |rc| rc else 0,
+            };
+        }
+        self.thread_entries = entries;
+
+        // First entry is parent, rest are replies
+        const parent = entries[0];
+        const replies = if (entries.len > 1) entries[1..] else &[_]Messages.MessageEntry{};
+        self.tui_root.thread.show(parent, replies);
+        {
+            const stderr = std.fs.File.stderr();
+            _ = stderr.write("[zlack] thread.visible=") catch {};
+            _ = stderr.write(if (self.tui_root.thread.visible) "true" else "false") catch {};
+            var cnt_buf: [8]u8 = undefined;
+            const cnt_str = std.fmt.bufPrint(&cnt_buf, " replies={d}\n", .{replies.len}) catch "\n";
+            _ = stderr.write(cnt_str) catch {};
+        }
+    }
+
+    fn sendMessageBroadcast(self: *App, text: []const u8, thread_ts: []const u8) void {
+        if (self.current_channel == null) return;
+        const resolved = self.resolveMentions(text);
+        defer if (resolved.ptr != text.ptr) self.allocator.free(resolved);
+        if (self.slack_client) |*client| {
+            client.chatPostMessageBroadcast(self.current_channel.?, resolved, thread_ts) catch {};
+        }
     }
 
     fn uploadFile(self: *App, path: []const u8) void {
@@ -406,21 +514,64 @@ pub const App = struct {
             };
             // Refresh messages to show the uploaded file
             if (self.current_channel) |ch| {
-                self.selectChannel(ch);
+                self.refreshMessages(ch);
             }
         }
     }
 
     fn sendMessage(self: *App, text: []const u8, thread_ts: ?[]const u8) void {
         if (self.current_channel == null) return;
+        const resolved = self.resolveMentions(text);
+        defer if (resolved.ptr != text.ptr) self.allocator.free(resolved);
         if (self.slack_client) |*client| {
-            client.chatPostMessage(self.current_channel.?, text, thread_ts) catch {
-                // On failure, enqueue to outbox for retry
+            client.chatPostMessage(self.current_channel.?, resolved, thread_ts) catch {
                 if (self.db) |*db| {
-                    db.enqueueMessage("default", self.current_channel.?, thread_ts, text) catch {};
+                    db.enqueueMessage("default", self.current_channel.?, thread_ts, resolved) catch {};
                 }
             };
         }
+    }
+
+    /// Replace @name with <@USER_ID> for Slack mentions.
+    fn resolveMentions(self: *App, text: []const u8) []const u8 {
+        if (std.mem.indexOfScalar(u8, text, '@') == null) return text;
+
+        var result: std.ArrayList(u8) = .empty;
+        var i: usize = 0;
+        var modified = false;
+
+        while (i < text.len) {
+            if (text[i] == '@') {
+                const start = i + 1;
+                var end = start;
+                while (end < text.len and text[end] != ' ' and text[end] != '\n' and text[end] != '\t') : (end += 1) {}
+                const name = text[start..end];
+                if (name.len > 0) {
+                    if (self.cache.getUserIdByName(name)) |uid| {
+                        if (!modified) {
+                            // Copy everything before this @
+                            result.appendSlice(self.allocator, text[0..i]) catch return text;
+                            modified = true;
+                        }
+                        result.appendSlice(self.allocator, "<@") catch return text;
+                        result.appendSlice(self.allocator, uid) catch return text;
+                        result.appendSlice(self.allocator, ">") catch return text;
+                        i = end;
+                        continue;
+                    }
+                }
+            }
+            if (modified) {
+                result.append(self.allocator, text[i]) catch return text;
+            }
+            i += 1;
+        }
+
+        if (!modified) {
+            result.deinit(self.allocator);
+            return text;
+        }
+        return result.toOwnedSlice(self.allocator) catch text;
     }
 
     // --- Data population helpers ---
@@ -587,10 +738,26 @@ pub const App = struct {
                 // Messages area
                 self.tui_root.focus = .messages;
                 const click_row = @as(usize, row - 1);
-                // Each message takes ~2 rows (name+ts, text).
                 const estimated_idx = self.tui_root.messages.scroll_offset + click_row / 2;
                 if (self.tui_root.messages.messages.len > 0) {
-                    self.tui_root.messages.selected_idx = @min(estimated_idx, self.tui_root.messages.messages.len - 1);
+                    const idx = @min(estimated_idx, self.tui_root.messages.messages.len - 1);
+                    self.tui_root.messages.selected_idx = idx;
+
+                    // Double-click detection: open thread
+                    const now = std.time.milliTimestamp();
+                    if (self.last_click_msg_idx != null and self.last_click_msg_idx.? == idx and
+                        (now - self.last_click_time) < 500)
+                    {
+                        const msg = self.tui_root.messages.messages[idx];
+                        const tts = msg.thread_ts orelse msg.ts;
+                        self.openThread(self.tui_root.messages.channel_id, tts);
+                        self.tui_root.input.thread_mode = true;
+                        self.tui_root.focus = .input;
+                        self.last_click_msg_idx = null;
+                    } else {
+                        self.last_click_time = now;
+                        self.last_click_msg_idx = idx;
+                    }
                 }
             }
             return;
@@ -643,6 +810,37 @@ pub const App = struct {
             display_row += 1;
         }
         return null;
+    }
+
+    /// Check if text contains a mention of the given user_id (as <@USER_ID>).
+    fn textContainsMention(_: *App, text: []const u8, user_id: []const u8) bool {
+        // Look for <@USER_ID> pattern
+        var i: usize = 0;
+        while (i + 3 + user_id.len <= text.len) : (i += 1) {
+            if (text[i] == '<' and text[i + 1] == '@') {
+                const start = i + 2;
+                if (start + user_id.len <= text.len and
+                    std.mem.eql(u8, text[start .. start + user_id.len], user_id))
+                {
+                    const end = start + user_id.len;
+                    if (end < text.len and text[end] == '>') return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    /// Mark a channel in the sidebar as having unread messages or mentions.
+    fn markChannelNotification(self: *App, channel_id: []const u8, is_mention: bool) void {
+        if (self.sidebar_entries) |entries| {
+            for (entries) |*entry| {
+                if (std.mem.eql(u8, entry.id, channel_id)) {
+                    entry.has_unread = true;
+                    if (is_mention) entry.has_mention = true;
+                    break;
+                }
+            }
+        }
     }
 
     fn renderLoadingScreen(self: *App, message: []const u8) void {

@@ -16,7 +16,8 @@ pub const Input = struct {
 
     pub const Action = union(enum) {
         send_message: []const u8,
-        upload_file: []const u8, // file path
+        send_message_also_channel: []const u8, // thread reply + channel post
+        upload_file: []const u8,
         none,
     };
 
@@ -36,6 +37,13 @@ pub const Input = struct {
                 self.file_mode = false;
                 self.buffer.clearRetainingCapacity();
                 self.cursor_pos = 0;
+            }
+            return .none;
+        }
+        // Shift+Enter: send thread reply also to channel
+        if (key.matches(Key.enter, .{ .shift = true })) {
+            if (self.buffer.items.len > 0 and self.thread_mode) {
+                return .{ .send_message_also_channel = self.buffer.items };
             }
             return .none;
         }

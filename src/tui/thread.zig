@@ -1,4 +1,7 @@
 const std = @import("std");
+const c = @cImport({
+    @cInclude("time.h");
+});
 const vaxis = @import("vaxis");
 const Window = vaxis.Window;
 const Key = vaxis.Key;
@@ -70,6 +73,23 @@ pub const Thread = struct {
         return null;
     }
 
+    fn formatSlackTs(ts: []const u8, buf: *[20]u8) []const u8 {
+        const dot_pos = std.mem.indexOfScalar(u8, ts, '.') orelse ts.len;
+        const epoch = std.fmt.parseInt(i64, ts[0..dot_pos], 10) catch return ts;
+        var time_val: c.time_t = @intCast(epoch);
+        var tm: c.struct_tm = undefined;
+        if (c.localtime_r(&time_val, &tm) == null) return ts;
+        const result = std.fmt.bufPrint(buf, "{d:0>4}-{d:0>2}-{d:0>2} {d:0>2}:{d:0>2}:{d:0>2}", .{
+            @as(u32, @intCast(tm.tm_year + 1900)),
+            @as(u32, @intCast(tm.tm_mon + 1)),
+            @as(u32, @intCast(tm.tm_mday)),
+            @as(u32, @intCast(tm.tm_hour)),
+            @as(u32, @intCast(tm.tm_min)),
+            @as(u32, @intCast(tm.tm_sec)),
+        }) catch return ts;
+        return result;
+    }
+
     /// Render the thread pane into the given window.
     pub fn render(self: *const Thread, win: Window) void {
         if (!self.visible) return;
@@ -84,21 +104,24 @@ pub const Thread = struct {
             });
         }
 
-        // Content area (offset by 1 for border)
-        const content = win.child(.{ .x_off = 2 });
+        // Content area (offset by 2 for border + gap, width limited)
+        const content = win.child(.{ .x_off = 2, .width = if (win.width > 2) win.width - 2 else 0 });
 
         // Header
-        _ = content.printSegment(.{ .text = "Thread", .style = .{ .bold = true } }, .{});
+        content.clear();
+        _ = content.printSegment(.{ .text = "Thread", .style = .{ .bold = true, .fg = .{ .index = 4 } } }, .{});
 
         var row: u16 = 1;
 
         // Parent message
         if (self.parent_msg) |parent| {
             if (row >= content.height) return;
+            var parent_time_buf: [20]u8 = undefined;
+            const parent_time = formatSlackTs(parent.ts, &parent_time_buf);
             _ = content.print(&.{
                 .{ .text = parent.user_name, .style = .{ .bold = true } },
                 .{ .text = "  ", .style = .{} },
-                .{ .text = parent.ts, .style = .{ .dim = true } },
+                .{ .text = parent_time, .style = .{ .dim = true } },
             }, .{ .row_offset = row });
             row += 1;
 
@@ -130,10 +153,12 @@ pub const Thread = struct {
             else
                 .{};
 
+            var reply_time_buf: [20]u8 = undefined;
+            const reply_time = formatSlackTs(reply.ts, &reply_time_buf);
             _ = content.print(&.{
                 .{ .text = reply.user_name, .style = name_style },
                 .{ .text = "  ", .style = text_style },
-                .{ .text = reply.ts, .style = .{ .dim = true } },
+                .{ .text = reply_time, .style = .{ .dim = true } },
             }, .{ .row_offset = row });
             row += 1;
 

@@ -144,6 +144,20 @@ pub const Cache = struct {
         return user.display_name orelse user.name;
     }
 
+    /// Reverse lookup: find user ID by name or display_name (case-sensitive).
+    pub fn getUserIdByName(self: *Cache, name: []const u8) ?[]const u8 {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
+        for (self.users.values()) |user| {
+            if (user.display_name) |dn| {
+                if (std.mem.eql(u8, dn, name)) return user.id;
+            }
+            if (std.mem.eql(u8, user.name, name)) return user.id;
+        }
+        return null;
+    }
+
     // -- Messages -----------------------------------------------------------
 
     /// Append a message to the cache for the given channel.

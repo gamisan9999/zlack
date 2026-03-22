@@ -25,6 +25,7 @@ pub const Sidebar = struct {
         is_im: bool = false,
         section: Section = .channels,
         has_unread: bool,
+        has_mention: bool = false,
     };
 
     pub const Action = union(enum) {
@@ -140,18 +141,23 @@ pub const Sidebar = struct {
 
             if (display_row >= scroll and row < win.height) {
                 const is_selected = i == self.selected_idx;
-                const style: Cell.Style = if (is_selected)
+                const name_style: Cell.Style = if (is_selected)
                     .{ .reverse = true }
+                else if (ch.has_mention)
+                    .{ .bold = true, .fg = .{ .index = 1 } } // red bold for mention
+                else if (ch.has_unread)
+                    .{ .bold = true }
                 else
                     .{};
+                const style: Cell.Style = if (is_selected) .{ .reverse = true } else .{};
 
                 const icon: []const u8 = if (ch.is_im) "  " else if (ch.is_private) "  " else "# ";
-                const unread: []const u8 = if (ch.has_unread) "* " else "  ";
+                const badge: []const u8 = if (ch.has_mention) "@ " else if (ch.has_unread) "* " else "  ";
 
                 _ = win.print(&.{
-                    .{ .text = unread, .style = style },
+                    .{ .text = badge, .style = if (ch.has_mention) .{ .fg = .{ .index = 1 }, .bold = true } else style },
                     .{ .text = icon, .style = style },
-                    .{ .text = ch.name, .style = style },
+                    .{ .text = ch.name, .style = name_style },
                 }, .{ .row_offset = row });
                 row += 1;
             }

@@ -216,7 +216,15 @@ pub const SlackClient = struct {
     }
 
     pub fn chatPostMessage(self: *SlackClient, channel_id: []const u8, text: []const u8, thread_ts: ?[]const u8) !void {
-        var params: [3]std.http.Header = undefined;
+        return self.chatPostMessageOpts(channel_id, text, thread_ts, false);
+    }
+
+    pub fn chatPostMessageBroadcast(self: *SlackClient, channel_id: []const u8, text: []const u8, thread_ts: []const u8) !void {
+        return self.chatPostMessageOpts(channel_id, text, thread_ts, true);
+    }
+
+    fn chatPostMessageOpts(self: *SlackClient, channel_id: []const u8, text: []const u8, thread_ts: ?[]const u8, reply_broadcast: bool) !void {
+        var params: [4]std.http.Header = undefined;
         var count: usize = 0;
         params[count] = .{ .name = "channel", .value = channel_id };
         count += 1;
@@ -224,6 +232,10 @@ pub const SlackClient = struct {
         count += 1;
         if (thread_ts) |tts| {
             params[count] = .{ .name = "thread_ts", .value = tts };
+            count += 1;
+        }
+        if (reply_broadcast) {
+            params[count] = .{ .name = "reply_broadcast", .value = "true" };
             count += 1;
         }
         const body = try self.apiCall("chat.postMessage", self.user_token, params[0..count]);
