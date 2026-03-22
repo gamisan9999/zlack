@@ -23,11 +23,8 @@ gh api -X PATCH "repos/$REPO" \
 
 # --- Branch protection for main ---
 echo "=> Branch protection: main"
-# Note: For public repos on free plan, use rulesets (branch protection rules
-# require GitHub Pro for private repos, but work on public repos).
-
 gh api -X PUT "repos/$REPO/branches/main/protection" \
-  --input - <<'EOF' --silent
+  --input - --silent <<'EOF'
 {
   "required_status_checks": {
     "strict": true,
@@ -46,18 +43,12 @@ gh api -X PUT "repos/$REPO/branches/main/protection" \
 }
 EOF
 
-# Allow admin (self) to bypass PR requirement for self-merge
-echo "=> Allow admin bypass for self-merge"
-gh api -X PATCH "repos/$REPO/branches/main/protection" \
-  --field enforce_admins=false \
-  --silent
-
 # --- Enable features ---
 echo "=> Enable Issues and Discussions"
 gh api -X PATCH "repos/$REPO" \
   --field has_issues=true \
-  --field has_discussions=true \
   --silent
+# Note: has_discussions requires org-level or manual enablement
 
 # --- Labels for PRs ---
 echo "=> Creating labels"
@@ -78,9 +69,8 @@ echo "  - Delete branch on merge: enabled"
 echo "  - main branch protection:"
 echo "    - Required status checks: Format check, Test (ubuntu/macos)"
 echo "    - Strict status checks (branch must be up-to-date)"
-echo "    - Linear history required (no merge commits to main)"
+echo "    - Linear history required"
 echo "    - Force push and deletion blocked"
 echo "    - Admin bypass: allowed (self-merge OK)"
 echo "    - PR reviews: 0 required (solo dev / self-merge)"
-echo "    - Stale review dismissal: enabled"
 echo "  - Labels: bug, feature, docs, ci, refactor"
