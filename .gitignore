@@ -5,3 +5,4 @@ devenv.lock
 zig-out/
 zig-cache/
 .zig-cache/
+*.log
