@@ -20,6 +20,14 @@ pub const Reaction = struct {
     users: ?[]const []const u8 = null,
 };
 
+pub const SlackFile = struct {
+    id: []const u8 = "",
+    name: []const u8 = "",
+    url_private: ?[]const u8 = null,
+    size: ?u64 = null,
+    mimetype: ?[]const u8 = null,
+};
+
 pub const Message = struct {
     ts: []const u8,
     text: []const u8,
@@ -27,6 +35,7 @@ pub const Message = struct {
     thread_ts: ?[]const u8 = null,
     reply_count: ?u32 = null,
     reactions: ?[]const Reaction = null,
+    files: ?[]const SlackFile = null,
 };
 
 pub const User = struct {

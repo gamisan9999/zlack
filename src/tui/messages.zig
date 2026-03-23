@@ -15,16 +15,24 @@ pub const Messages = struct {
     scroll_offset: usize = 0,
     channel_id: []const u8 = "",
 
+    pub const FileInfo = struct {
+        name: []const u8,
+        url: []const u8,
+        size: u64 = 0,
+    };
+
     pub const MessageEntry = struct {
         ts: []const u8,
         user_name: []const u8,
         text: []const u8,
         thread_ts: ?[]const u8 = null,
         reply_count: u32 = 0,
+        file: ?FileInfo = null,
     };
 
     pub const Action = union(enum) {
         open_thread: struct { channel_id: []const u8, thread_ts: []const u8 },
+        download_file: FileInfo,
         none,
     };
 
@@ -67,6 +75,14 @@ pub const Messages = struct {
         if (key.matches('b', .{ .ctrl = true })) {
             const page: usize = 10;
             self.selected_idx = if (self.selected_idx > page) self.selected_idx - page else 0;
+            return .none;
+        }
+        // Ctrl+D: download file from selected message
+        if (key.matches('d', .{ .ctrl = true })) {
+            const msg = self.messages[self.selected_idx];
+            if (msg.file) |file| {
+                return .{ .download_file = file };
+            }
             return .none;
         }
         // Enter: open thread for selected message
@@ -153,6 +169,27 @@ pub const Messages = struct {
             row += 1;
 
             if (row >= win.height) break;
+
+            // File attachment indicator
+            if (msg.file) |file| {
+                if (row < win.height) {
+                    var size_buf: [32]u8 = undefined;
+                    const size_str = if (file.size >= 1024 * 1024)
+                        std.fmt.bufPrint(&size_buf, " ({d}MB)", .{file.size / (1024 * 1024)}) catch ""
+                    else if (file.size >= 1024)
+                        std.fmt.bufPrint(&size_buf, " ({d}KB)", .{file.size / 1024}) catch ""
+                    else if (file.size > 0)
+                        std.fmt.bufPrint(&size_buf, " ({d}B)", .{file.size}) catch ""
+                    else
+                        "";
+                    _ = win.print(&.{
+                        .{ .text = "  [Ctrl+D] ", .style = .{ .fg = .{ .index = 3 }, .dim = true } },
+                        .{ .text = file.name, .style = .{ .fg = .{ .index = 3 } } },
+                        .{ .text = size_str, .style = .{ .fg = .{ .index = 3 }, .dim = true } },
+                    }, .{ .row_offset = row });
+                    row += 1;
+                }
+            }
 
             // Thread indicator
             if (msg.reply_count > 0) {

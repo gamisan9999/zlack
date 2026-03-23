@@ -304,6 +304,9 @@ pub const App = struct {
                                 self.tui_root.input.file_mode = false;
                                 self.tui_root.input.clear();
                             },
+                            .download_file => |file| {
+                                self.downloadFile(file);
+                            },
                             .open_thread => |t| {
                                 self.openThread(t.channel_id, t.thread_ts);
                                 self.tui_root.input.thread_mode = true;
@@ -424,12 +427,16 @@ pub const App = struct {
         if (self.slack_client) |*client| {
             const api_messages = client.conversationsHistory(channel_id, .{}) catch &.{};
             for (api_messages) |msg| {
+                const first_file = if (msg.files) |files| if (files.len > 0) &files[0] else null else null;
                 self.cache.addMessage(channel_id, .{
                     .ts = msg.ts,
                     .user_id = msg.user,
                     .text = msg.text,
                     .thread_ts = msg.thread_ts,
                     .reply_count = if (msg.reply_count) |rc| rc else 0,
+                    .file_name = if (first_file) |f| f.name else null,
+                    .file_url = if (first_file) |f| f.url_private else null,
+                    .file_size = if (first_file) |f| f.size orelse 0 else 0,
                 });
             }
         }
@@ -492,6 +499,34 @@ pub const App = struct {
         if (self.slack_client) |*client| {
             client.chatPostMessageBroadcast(self.current_channel.?, resolved, thread_ts) catch {};
         }
+    }
+
+    fn downloadFile(self: *App, file: Messages.FileInfo) void {
+        if (self.slack_client == null) return;
+        var client = &self.slack_client.?;
+
+        // Build save path: ~/Downloads/filename
+        const home = std.posix.getenv("HOME") orelse return;
+        var path_buf: [1024]u8 = undefined;
+        const save_path = std.fmt.bufPrint(&path_buf, "{s}/Downloads/{s}", .{ home, file.name }) catch return;
+
+        const stderr = std.fs.File.stderr();
+        _ = stderr.write("[zlack] downloading: ") catch {};
+        _ = stderr.write(file.name) catch {};
+        _ = stderr.write(" -> ") catch {};
+        _ = stderr.write(save_path) catch {};
+        _ = stderr.write("\n") catch {};
+
+        client.downloadFile(file.url, save_path) catch |err| {
+            _ = stderr.write("[zlack] download failed: ") catch {};
+            _ = stderr.write(@errorName(err)) catch {};
+            _ = stderr.write("\n") catch {};
+            return;
+        };
+
+        _ = stderr.write("[zlack] download complete: ") catch {};
+        _ = stderr.write(save_path) catch {};
+        _ = stderr.write("\n") catch {};
     }
 
     fn uploadFile(self: *App, path: []const u8) void {
@@ -684,6 +719,11 @@ pub const App = struct {
                 .text = msg.text,
                 .thread_ts = msg.thread_ts,
                 .reply_count = msg.reply_count,
+                .file = if (msg.file_name != null and msg.file_url != null) .{
+                    .name = msg.file_name.?,
+                    .url = msg.file_url.?,
+                    .size = msg.file_size,
+                } else null,
             };
         }
 
