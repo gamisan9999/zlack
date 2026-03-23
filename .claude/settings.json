@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "jq -r '.tool_input.file_path' | { read -r f; if echo \"$f\" | grep -qE '^src/.*\\.zig$'; then echo '{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"REMINDER: Security-related .zig changes require tests first (TDD). Did you write the test before the implementation?\"}}'; fi; } 2>/dev/null || true",
+            "statusMessage": "TDD check"
+          }
+        ]
+      }
+    ]
+  }
+}
