@@ -140,14 +140,30 @@ pub const SocketClient = struct {
             .tls = is_tls,
         });
 
-        const path = if (uri.path.isEmpty())
+        const raw_path = if (uri.path.isEmpty())
             "/"
         else switch (uri.path) {
             .raw => |r| r,
             .percent_encoded => |p| p,
         };
 
-        try client.handshake(path, .{});
+        // Include query string in handshake path (required for Socket Mode ticket)
+        const query = if (uri.query) |q| switch (q) {
+            .raw => |r| r,
+            .percent_encoded => |p| p,
+        } else null;
+
+        var path_buf: [2048]u8 = undefined;
+        const full_path = if (query) |q|
+            std.fmt.bufPrint(&path_buf, "{s}?{s}", .{ raw_path, q }) catch raw_path
+        else
+            raw_path;
+
+        // Build Host header (required by HTTP/1.1 and Slack's reverse proxy)
+        var host_header_buf: [256]u8 = undefined;
+        const host_header = std.fmt.bufPrint(&host_header_buf, "Host: {s}\r\n", .{host}) catch "";
+
+        try client.handshake(full_path, .{ .headers = host_header });
         self.ws_client = client;
         self.running = true;
     }
