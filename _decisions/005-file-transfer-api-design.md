@@ -46,3 +46,8 @@ Slack のファイル操作には複数の API がある:
 
 - https://api.slack.com/messaging/files
 - Slack App scope: `files:write` (upload), `files:read` (download URL in history)
+
+## Related Commits
+- PR #4: feat: ファイルダウンロード機能 (Ctrl+D)
+- PR #9: feat: ダウンロード TUI フィードバック + デバッグログ削除
+- 677500b: feat: DM対応, ファイルアップロード, TUI大幅改善
