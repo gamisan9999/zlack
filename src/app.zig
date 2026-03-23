@@ -26,6 +26,7 @@ const Keychain = keychain_mod.Keychain;
 const Sidebar = @import("tui/sidebar.zig").Sidebar;
 const Messages = @import("tui/messages.zig").Messages;
 const Modal = @import("tui/modal.zig").Modal;
+const security = @import("security.zig");
 
 const Event = vaxis.Event;
 const Loop = vaxis.Loop;
@@ -513,8 +514,9 @@ pub const App = struct {
         var client = &self.slack_client.?;
 
         const home = std.posix.getenv("HOME") orelse return;
+        const safe_name = security.sanitizeFilename(file.name);
         var path_buf: [1024]u8 = undefined;
-        const save_path = std.fmt.bufPrint(&path_buf, "{s}/Downloads/{s}", .{ home, file.name }) catch return;
+        const save_path = std.fmt.bufPrint(&path_buf, "{s}/Downloads/{s}", .{ home, safe_name }) catch return;
 
         self.tui_root.status_msg = "Downloading...";
 

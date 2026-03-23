@@ -203,10 +203,13 @@ pub const SocketClient = struct {
 
         // ACK: Send envelope_id back to Slack (required for all envelope messages)
         if (getStr(root, "envelope_id")) |envelope_id| {
-            var ack_buf: [256]u8 = undefined;
-            const ack = std.fmt.bufPrint(&ack_buf, "{{\"envelope_id\":\"{s}\"}}", .{envelope_id}) catch null;
-            if (ack) |ack_msg| {
-                client.writeText(@constCast(ack_msg)) catch {};
+            // Validate: envelope_id should be alphanumeric + dashes only
+            if (isValidEnvelopeId(envelope_id)) {
+                var ack_buf: [256]u8 = undefined;
+                const ack = std.fmt.bufPrint(&ack_buf, "{{\"envelope_id\":\"{s}\"}}", .{envelope_id}) catch null;
+                if (ack) |ack_msg| {
+                    client.writeText(@constCast(ack_msg)) catch {};
+                }
             }
         }
 
@@ -256,6 +259,16 @@ pub const SocketClient = struct {
                 } });
             }
         }
+    }
+
+    /// Validate envelope_id contains only safe characters (no JSON injection).
+    /// Slack envelope_ids are alphanumeric with dashes, dots, and underscores.
+    pub fn isValidEnvelopeId(id: []const u8) bool {
+        if (id.len == 0 or id.len > 200) return false;
+        for (id) |c| {
+            if (!std.ascii.isAlphanumeric(c) and c != '-' and c != '_' and c != '.') return false;
+        }
+        return true;
     }
 
     fn getStr(obj: std.json.ObjectMap, key: []const u8) ?[]const u8 {
@@ -378,6 +391,42 @@ test "EventQueue two-thread concurrent push" {
         total += 1;
     }
     try std.testing.expectEqual(push_count * 2, total);
+}
+
+// --- Security tests ---
+
+test "isValidEnvelopeId_normal" {
+    try std.testing.expect(SocketClient.isValidEnvelopeId("abc-123_def.456"));
+}
+
+test "isValidEnvelopeId_rejects_empty" {
+    try std.testing.expect(!SocketClient.isValidEnvelopeId(""));
+}
+
+test "isValidEnvelopeId_rejects_quotes" {
+    try std.testing.expect(!SocketClient.isValidEnvelopeId("abc\"inject"));
+}
+
+test "isValidEnvelopeId_rejects_braces" {
+    try std.testing.expect(!SocketClient.isValidEnvelopeId("abc}\":{\"evil\":true"));
+}
+
+test "isValidEnvelopeId_rejects_newline" {
+    try std.testing.expect(!SocketClient.isValidEnvelopeId("abc\ndef"));
+}
+
+test "isValidEnvelopeId_rejects_backslash" {
+    try std.testing.expect(!SocketClient.isValidEnvelopeId("abc\\ndef"));
+}
+
+test "isValidEnvelopeId_rejects_too_long" {
+    const long = "a" ** 201;
+    try std.testing.expect(!SocketClient.isValidEnvelopeId(long));
+}
+
+test "isValidEnvelopeId_accepts_max_length" {
+    const max = "a" ** 200;
+    try std.testing.expect(SocketClient.isValidEnvelopeId(max));
 }
 
 test "calculateBackoff values" {

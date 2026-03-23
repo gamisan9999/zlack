@@ -53,6 +53,7 @@ pub fn build(b: *std.Build) void {
         "src/tui/root.zig",
         "src/tui/input.zig",
         "src/tui/messages.zig",
+        "src/security.zig",
     };
 
     for (test_modules) |mod| {
