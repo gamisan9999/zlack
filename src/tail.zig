@@ -240,23 +240,33 @@ pub const TailRunner = struct {
     }
 
     fn tailLoop(self: *TailRunner) void {
+        const stderr = std.fs.File.stderr();
         while (self.running) {
             if (self.event_queue.pop()) |event| {
                 switch (event) {
                     .message => |msg| {
-                        // Filter: only subscribed channels
                         if (self.channel_names_by_id.get(msg.channel_id)) |channel_name| {
                             const user_name = if (msg.user) |uid| self.cache.getUserName(uid) orelse uid else "system";
                             self.outputMessage(channel_name, msg.channel_id, user_name, msg.ts, msg.text);
                         }
                     },
                     .reconnect_requested => {
-                        self.reconnect();
+                        _ = stderr.write("[zlack-tail] Disconnected. Reconnecting...\n") catch {};
+                        self.reconnectWithRetry();
                     },
-                    .error_event => {},
+                    .error_event => |msg| {
+                        _ = stderr.write("[zlack-tail] Socket error: ") catch {};
+                        _ = stderr.write(msg) catch {};
+                        _ = stderr.write("\n") catch {};
+                    },
                     .channel_marked => {},
                 }
             } else {
+                // Check if socket is dead (no client) and try to reconnect
+                if (self.socket_client == null) {
+                    _ = stderr.write("[zlack-tail] Socket lost. Reconnecting...\n") catch {};
+                    self.reconnectWithRetry();
+                }
                 std.Thread.sleep(50 * std.time.ns_per_ms);
             }
         }
@@ -288,26 +298,47 @@ pub const TailRunner = struct {
         }
     }
 
-    fn reconnect(self: *TailRunner) void {
+    fn reconnectWithRetry(self: *TailRunner) void {
         const stderr = std.fs.File.stderr();
-        _ = stderr.write("[zlack-tail] Reconnecting...\n") catch {};
 
         if (self.socket_client) |*sc| sc.disconnect();
         self.socket_client = null;
 
-        if (self.slack_client) |*client| {
-            const url = client.appsConnectionsOpen() catch return;
-            defer self.allocator.free(url);
-            self.socket_client = SocketClient.init(self.allocator, &self.event_queue);
-            self.socket_client.?.connect(url) catch {
-                self.socket_client = null;
+        var attempt: u32 = 0;
+        while (attempt < 5 and self.running) : (attempt += 1) {
+            if (attempt > 0) {
+                const backoff_ms = socket_mod.calculateBackoff(attempt);
+                var backoff_buf: [64]u8 = undefined;
+                const backoff_msg = std.fmt.bufPrint(&backoff_buf, "[zlack-tail] Retry {d}/5 in {d}ms...\n", .{ attempt + 1, backoff_ms }) catch "[zlack-tail] Retrying...\n";
+                _ = stderr.write(backoff_msg) catch {};
+                std.Thread.sleep(backoff_ms * std.time.ns_per_ms);
+            }
+
+            if (self.slack_client) |*client| {
+                // Reset HTTP client for fresh connection
+                client.http_client.deinit();
+                client.http_client = std.http.Client{ .allocator = self.allocator };
+
+                const url = client.appsConnectionsOpen() catch continue;
+                defer self.allocator.free(url);
+
+                self.socket_client = SocketClient.init(self.allocator, &self.event_queue);
+                self.socket_client.?.connect(url) catch {
+                    self.socket_client = null;
+                    continue;
+                };
+                _ = self.socket_client.?.startReadLoop() catch {
+                    if (self.socket_client) |*sc| sc.disconnect();
+                    self.socket_client = null;
+                    continue;
+                };
+
+                _ = stderr.write("[zlack-tail] Reconnected successfully.\n") catch {};
                 return;
-            };
-            _ = self.socket_client.?.startReadLoop() catch {
-                self.socket_client.?.disconnect();
-                self.socket_client = null;
-            };
+            }
         }
+
+        _ = stderr.write("[zlack-tail] Failed to reconnect after 5 attempts.\n") catch {};
     }
 
     fn keychainSave(service: []const u8, account: []const u8, password: []const u8) anyerror!void {
