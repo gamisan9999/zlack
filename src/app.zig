@@ -430,6 +430,8 @@ pub const App = struct {
     /// Refresh messages without closing thread pane.
     fn refreshMessages(self: *App, channel_id: []const u8) void {
         if (self.slack_client) |*client| {
+            // Clear stale cache and re-fetch from API
+            self.cache.clearChannelMessages(channel_id);
             const api_messages = client.conversationsHistory(channel_id, .{}) catch &.{};
             for (api_messages) |msg| {
                 const first_file = if (msg.files) |files| if (files.len > 0) &files[0] else null else null;
