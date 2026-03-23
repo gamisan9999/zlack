@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+# Pre-commit hook: run zig build test before allowing commit.
+# Ensures no broken tests are committed.
+#
+# Skip with: git commit --no-verify
+
+set -euo pipefail
+
+# Only run if .zig files are staged
+if git diff --cached --name-only | grep -q '\.zig$'; then
+    echo "[pre-commit] Running zig build test..."
+
+    # Find zig binary (devenv or system)
+    ZIG=$(command -v zig 2>/dev/null || echo "")
+    if [ -z "$ZIG" ] && [ -f ".devenv/profile/bin/zig" ]; then
+        ZIG=".devenv/profile/bin/zig"
+    fi
+
+    if [ -z "$ZIG" ]; then
+        echo "[pre-commit] WARNING: zig not found, skipping tests"
+        exit 0
+    fi
+
+    if ! $ZIG build test --summary all 2>&1 | tail -5; then
+        echo ""
+        echo "  BLOCKED: Tests failed. Fix tests before committing."
+        echo "  To bypass (emergency): git commit --no-verify"
+        echo ""
+        exit 1
+    fi
+
+    echo "[pre-commit] All tests passed."
+fi
+
+# Check formatting
+if git diff --cached --name-only | grep -q '\.zig$'; then
+    echo "[pre-commit] Running zig fmt --check..."
+    if ! $ZIG fmt --check . 2>/dev/null; then
+        echo ""
+        echo "  BLOCKED: Formatting issues found. Run 'zig fmt .' first."
+        echo ""
+        exit 1
+    fi
+    echo "[pre-commit] Format check passed."
+fi
