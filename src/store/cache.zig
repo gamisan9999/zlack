@@ -147,6 +147,15 @@ pub const Cache = struct {
         return user.display_name orelse user.name;
     }
 
+    /// Look up a user's login name (e.g., "kishigami.kentaro") by user_id.
+    pub fn getUserLoginName(self: *Cache, user_id: []const u8) ?[]const u8 {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
+        const user = self.users.get(user_id) orelse return null;
+        return user.name;
+    }
+
     /// Reverse lookup: find user ID by name or display_name (case-sensitive).
     pub fn getUserIdByName(self: *Cache, name: []const u8) ?[]const u8 {
         self.mutex.lock();
