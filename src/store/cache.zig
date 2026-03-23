@@ -216,6 +216,24 @@ pub const Cache = struct {
         }.lessThan);
     }
 
+    /// Clear all cached messages for a specific channel.
+    pub fn clearChannelMessages(self: *Cache, channel_id: []const u8) void {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
+        if (self.messages.getPtr(channel_id)) |list| {
+            for (list.items) |msg| {
+                self.allocator.free(msg.ts);
+                self.allocator.free(msg.text);
+                if (msg.user_id) |uid| self.allocator.free(uid);
+                if (msg.thread_ts) |tts| self.allocator.free(tts);
+                if (msg.file_name) |fn_| self.allocator.free(fn_);
+                if (msg.file_url) |fu| self.allocator.free(fu);
+            }
+            list.clearRetainingCapacity();
+        }
+    }
+
     /// Get all messages for a channel, sorted by ts ascending.
     /// Returns null if no messages exist for the channel.
     pub fn getMessages(self: *Cache, channel_id: []const u8) ?[]const CachedMessage {
