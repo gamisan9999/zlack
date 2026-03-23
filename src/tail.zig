@@ -111,25 +111,21 @@ pub const TailRunner = struct {
         _ = stderr.write("[zlack-tail] Fetching users and channels...\n") catch {};
 
         const api_users = self.slack_client.?.usersList() catch &.{};
-        for (api_users) |u| {
-            self.cache.updateUsers(&.{.{
-                .id = u.id,
-                .name = u.name,
-                .display_name = u.display_name orelse u.real_name,
-            }});
+        {
+            var cached_users: std.ArrayList(cache_mod.CachedUser) = .empty;
+            defer cached_users.deinit(self.allocator);
+            for (api_users) |u| {
+                cached_users.append(self.allocator, .{
+                    .id = u.id,
+                    .name = u.name,
+                    .display_name = u.display_name orelse u.real_name,
+                }) catch continue;
+            }
+            self.cache.updateUsers(cached_users.items);
         }
 
         const api_channels = self.slack_client.?.conversationsList() catch &.{};
         const api_ims = self.slack_client.?.conversationsListIm();
-        // Store in cache for name resolution
-        for (api_channels) |ch| {
-            self.cache.updateChannels(&.{.{
-                .id = ch.id,
-                .name = ch.name,
-                .is_member = if (ch.is_member) |m| m else false,
-                .channel_type = "public_channel",
-            }});
-        }
 
         // --- Step 4: Resolve channel names to IDs ---
         try self.resolveChannelNames(api_channels, api_ims);
@@ -151,25 +147,29 @@ pub const TailRunner = struct {
             }
         }
 
-        // --- Step 6: Fetch initial history ---
-        self.fetchInitialHistory();
-
-        // --- Step 7: Connect Socket Mode ---
+        // --- Step 6: Connect Socket Mode (before history fetch to avoid URL expiry) ---
         const wss_url = self.slack_client.?.appsConnectionsOpen() catch {
-            _ = stderr.write("[zlack-tail] Failed to connect Socket Mode\n") catch {};
+            _ = stderr.write("[zlack-tail] Failed to get Socket Mode URL\n") catch {};
             return error.SocketModeFailed;
         };
         defer self.allocator.free(wss_url);
 
         self.socket_client = SocketClient.init(self.allocator, &self.event_queue);
-        self.socket_client.?.connect(wss_url) catch {
-            _ = stderr.write("[zlack-tail] WebSocket connection failed\n") catch {};
+        self.socket_client.?.connect(wss_url) catch |err| {
+            _ = stderr.write("[zlack-tail] WebSocket connect error: ") catch {};
+            _ = stderr.write(@errorName(err)) catch {};
+            _ = stderr.write("\n") catch {};
             return error.SocketModeFailed;
         };
-        _ = self.socket_client.?.startReadLoop() catch {
-            _ = stderr.write("[zlack-tail] Read loop start failed\n") catch {};
+        _ = self.socket_client.?.startReadLoop() catch |err| {
+            _ = stderr.write("[zlack-tail] Read loop error: ") catch {};
+            _ = stderr.write(@errorName(err)) catch {};
+            _ = stderr.write("\n") catch {};
             return error.SocketModeFailed;
         };
+
+        // --- Step 7: Fetch initial history (after WebSocket connected) ---
+        self.fetchInitialHistory();
 
         _ = stderr.write("[zlack-tail] Connected. Tailing messages... (Ctrl+C to stop)\n") catch {};
 
@@ -190,14 +190,20 @@ pub const TailRunner = struct {
                 }
             }
             if (!found) {
-                // Search in IMs
+                // Search in IMs — match by display_name, login name, or user ID
                 for (api_ims) |ch| {
-                    const im_name = if (ch.user) |uid| self.cache.getUserName(uid) orelse uid else "DM";
-                    if (eqlIgnoreCase(im_name, name)) {
-                        self.channel_ids.put(self.allocator, name, ch.id) catch continue;
-                        self.channel_names_by_id.put(self.allocator, ch.id, im_name) catch continue;
-                        found = true;
-                        break;
+                    if (ch.user) |uid| {
+                        const display_name = self.cache.getUserName(uid) orelse uid;
+                        const login_name = self.cache.getUserLoginName(uid);
+                        if (eqlIgnoreCase(display_name, name) or
+                            (login_name != null and eqlIgnoreCase(login_name.?, name)) or
+                            eqlIgnoreCase(uid, name))
+                        {
+                            self.channel_ids.put(self.allocator, name, ch.id) catch continue;
+                            self.channel_names_by_id.put(self.allocator, ch.id, display_name) catch continue;
+                            found = true;
+                            break;
+                        }
                     }
                 }
             }
