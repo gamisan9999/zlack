@@ -30,6 +30,7 @@ pub const Root = struct {
     input: Input = Input.init(),
     focus: Focus = .sidebar,
     workspace_name: []const u8 = "zlack",
+    status_msg: ?[]const u8 = null,
     show_modal: ?ModalType = null,
     modal: ?Modal = null,
 
@@ -303,10 +304,22 @@ pub const Root = struct {
             .thread => "[Thread]",
             .input => "[Input]",
         };
+        const focus_col: u16 = @intCast(@min(total_w -| 12, self.workspace_name.len + 20));
         _ = header_win.printSegment(.{
             .text = focus_label,
             .style = .{ .fg = .{ .index = 4 }, .bold = true },
-        }, .{ .col_offset = @intCast(@min(total_w -| 12, self.workspace_name.len + 20)) });
+        }, .{ .col_offset = focus_col });
+
+        // Status message (temporary notification)
+        if (self.status_msg) |status| {
+            const status_col = focus_col + @as(u16, @intCast(focus_label.len)) + 2;
+            if (status_col < total_w) {
+                _ = header_win.printSegment(.{
+                    .text = status,
+                    .style = .{ .fg = .{ .index = 2 }, .bold = true },
+                }, .{ .col_offset = status_col });
+            }
+        }
 
         // Modal overlay (rendered last, on top of everything)
         if (self.modal) |*m| {
