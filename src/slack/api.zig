@@ -498,10 +498,12 @@ pub const SlackClient = struct {
                 .response_writer = &response_writer,
                 .redirect_behavior = .unhandled,
             }) catch |err| {
-                // Retry on stale connection errors (connection pool issue)
+                // Retry on stale connection errors — reset HTTP client to clear pool
                 if ((err == error.HttpConnectionClosing or err == error.WriteFailed) and attempt <= 3) {
                     const stderr = std.fs.File.stderr();
-                    _ = stderr.write("[zlack] connection reset, retrying...\n") catch {};
+                    _ = stderr.write("[zlack] connection reset, reinit http client...\n") catch {};
+                    self.http_client.deinit();
+                    self.http_client = std.http.Client{ .allocator = self.allocator };
                     attempt += 1;
                     continue;
                 }
