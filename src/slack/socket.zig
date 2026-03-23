@@ -176,14 +176,21 @@ pub const SocketClient = struct {
             const msg = maybe_msg orelse continue;
             defer client.done(msg);
 
-            self.handleMessage(msg.data) catch |err| {
+            // Handle ping frames — respond with pong
+            if (msg.type == .ping) {
+                client.writePong(@constCast(msg.data)) catch {};
+                continue;
+            }
+
+            // Parse and handle text messages
+            self.handleMessage(client, msg.data) catch |err| {
                 _ = err;
                 self.event_queue.push(.{ .error_event = "message parse error" });
             };
         }
     }
 
-    fn handleMessage(self: *SocketClient, data: []const u8) !void {
+    fn handleMessage(self: *SocketClient, client: *websocket.Client, data: []const u8) !void {
         // Parse the outer envelope. Socket Mode messages have a "type" field
         // and a nested "payload" with an inner "event".
         const parsed = std.json.parseFromSlice(std.json.Value, self.allocator, data, .{}) catch {
@@ -193,6 +200,15 @@ pub const SocketClient = struct {
         defer parsed.deinit();
 
         const root = parsed.value.object;
+
+        // ACK: Send envelope_id back to Slack (required for all envelope messages)
+        if (getStr(root, "envelope_id")) |envelope_id| {
+            var ack_buf: [256]u8 = undefined;
+            const ack = std.fmt.bufPrint(&ack_buf, "{{\"envelope_id\":\"{s}\"}}", .{envelope_id}) catch null;
+            if (ack) |ack_msg| {
+                client.writeText(@constCast(ack_msg)) catch {};
+            }
+        }
 
         // Extract top-level type
         const type_val = root.get("type") orelse return;

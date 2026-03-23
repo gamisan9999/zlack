@@ -1,7 +1,7 @@
 const std = @import("std");
 const App = @import("app.zig").App;
 
-const version = "0.1.0";
+const version = "0.1.1";
 const log_dir = ".local/share/zlack";
 const log_filename = "zlack.log";
 
