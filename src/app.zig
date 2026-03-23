@@ -61,6 +61,9 @@ pub const App = struct {
     last_click_time: i64 = 0,
     last_click_msg_idx: ?usize = null,
 
+    // Status message buffer
+    status_buf: [256]u8 = undefined,
+
     pub fn init(allocator: Allocator, reconfigure: bool) !App {
         const vx = try vaxis.Vaxis.init(allocator, .{});
 
@@ -279,6 +282,8 @@ pub const App = struct {
             const event = self.loop.?.nextEvent();
             switch (event) {
                 .key_press => |key| {
+                    // Clear status on any key press
+                    self.tui_root.status_msg = null;
                     if (self.tui_root.handleInput(self.allocator, key)) |action| {
                         switch (action) {
                             .quit => return,
@@ -505,15 +510,14 @@ pub const App = struct {
         if (self.slack_client == null) return;
         var client = &self.slack_client.?;
 
-        // Build save path: ~/Downloads/filename
         const home = std.posix.getenv("HOME") orelse return;
         var path_buf: [1024]u8 = undefined;
         const save_path = std.fmt.bufPrint(&path_buf, "{s}/Downloads/{s}", .{ home, file.name }) catch return;
 
+        self.tui_root.status_msg = "Downloading...";
+
         const stderr = std.fs.File.stderr();
         _ = stderr.write("[zlack] downloading: ") catch {};
-        _ = stderr.write(file.name) catch {};
-        _ = stderr.write(" -> ") catch {};
         _ = stderr.write(save_path) catch {};
         _ = stderr.write("\n") catch {};
 
@@ -521,12 +525,14 @@ pub const App = struct {
             _ = stderr.write("[zlack] download failed: ") catch {};
             _ = stderr.write(@errorName(err)) catch {};
             _ = stderr.write("\n") catch {};
+            self.tui_root.status_msg = "Download failed!";
             return;
         };
 
-        _ = stderr.write("[zlack] download complete: ") catch {};
-        _ = stderr.write(save_path) catch {};
-        _ = stderr.write("\n") catch {};
+        _ = stderr.write("[zlack] download complete\n") catch {};
+        // Show saved path in status (use static buffer for display)
+        const msg = std.fmt.bufPrint(&self.status_buf, "Saved: ~/Downloads/{s}", .{file.name}) catch "Download complete!";
+        self.tui_root.status_msg = msg;
     }
 
     fn uploadFile(self: *App, path: []const u8) void {
