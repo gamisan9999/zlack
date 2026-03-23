@@ -1,8 +1,6 @@
 const std = @import("std");
-const c = @cImport({
-    @cInclude("time.h");
-});
 const vaxis = @import("vaxis");
+const time_fmt = @import("../time_fmt.zig");
 const Window = vaxis.Window;
 const Key = vaxis.Key;
 const Cell = vaxis.Cell;
@@ -73,23 +71,6 @@ pub const Thread = struct {
         return null;
     }
 
-    fn formatSlackTs(ts: []const u8, buf: *[20]u8) []const u8 {
-        const dot_pos = std.mem.indexOfScalar(u8, ts, '.') orelse ts.len;
-        const epoch = std.fmt.parseInt(i64, ts[0..dot_pos], 10) catch return ts;
-        var time_val: c.time_t = @intCast(epoch);
-        var tm: c.struct_tm = undefined;
-        if (c.localtime_r(&time_val, &tm) == null) return ts;
-        const result = std.fmt.bufPrint(buf, "{d:0>4}-{d:0>2}-{d:0>2} {d:0>2}:{d:0>2}:{d:0>2}", .{
-            @as(u32, @intCast(tm.tm_year + 1900)),
-            @as(u32, @intCast(tm.tm_mon + 1)),
-            @as(u32, @intCast(tm.tm_mday)),
-            @as(u32, @intCast(tm.tm_hour)),
-            @as(u32, @intCast(tm.tm_min)),
-            @as(u32, @intCast(tm.tm_sec)),
-        }) catch return ts;
-        return result;
-    }
-
     /// Render the thread pane into the given window.
     pub fn render(self: *const Thread, win: Window) void {
         if (!self.visible) return;
@@ -117,7 +98,7 @@ pub const Thread = struct {
         if (self.parent_msg) |parent| {
             if (row >= content.height) return;
             var parent_time_buf: [20]u8 = undefined;
-            const parent_time = formatSlackTs(parent.ts, &parent_time_buf);
+            const parent_time = time_fmt.formatSlackTs(parent.ts, &parent_time_buf);
             _ = content.print(&.{
                 .{ .text = parent.user_name, .style = .{ .bold = true } },
                 .{ .text = "  ", .style = .{} },
@@ -154,7 +135,7 @@ pub const Thread = struct {
                 .{};
 
             var reply_time_buf: [20]u8 = undefined;
-            const reply_time = formatSlackTs(reply.ts, &reply_time_buf);
+            const reply_time = time_fmt.formatSlackTs(reply.ts, &reply_time_buf);
             _ = content.print(&.{
                 .{ .text = reply.user_name, .style = name_style },
                 .{ .text = "  ", .style = text_style },

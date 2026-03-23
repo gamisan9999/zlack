@@ -1,8 +1,6 @@
 const std = @import("std");
-const c = @cImport({
-    @cInclude("time.h");
-});
 const vaxis = @import("vaxis");
+const time_fmt = @import("../time_fmt.zig");
 const Window = vaxis.Window;
 const Key = vaxis.Key;
 const Cell = vaxis.Cell;
@@ -95,27 +93,6 @@ pub const Messages = struct {
         return null;
     }
 
-    /// Convert Slack ts ("1773282759.367279") to "YYYY-MM-DD HH:MM:SS" in local timezone.
-    fn formatSlackTs(ts: []const u8, buf: *[20]u8) []const u8 {
-        // Parse integer part before '.'
-        const dot_pos = std.mem.indexOfScalar(u8, ts, '.') orelse ts.len;
-        const epoch = std.fmt.parseInt(i64, ts[0..dot_pos], 10) catch return ts;
-
-        var time_val: c.time_t = @intCast(epoch);
-        var tm: c.struct_tm = undefined;
-        if (c.localtime_r(&time_val, &tm) == null) return ts;
-
-        const result = std.fmt.bufPrint(buf, "{d:0>4}-{d:0>2}-{d:0>2} {d:0>2}:{d:0>2}:{d:0>2}", .{
-            @as(u32, @intCast(tm.tm_year + 1900)),
-            @as(u32, @intCast(tm.tm_mon + 1)),
-            @as(u32, @intCast(tm.tm_mday)),
-            @as(u32, @intCast(tm.tm_hour)),
-            @as(u32, @intCast(tm.tm_min)),
-            @as(u32, @intCast(tm.tm_sec)),
-        }) catch return ts;
-        return result;
-    }
-
     /// Render messages into the given window.
     pub fn render(self: *Messages, win: Window) void {
         win.clear();
@@ -154,7 +131,7 @@ pub const Messages = struct {
 
             // Header line: user_name  YYYY-MM-DD HH:MM:SS
             var time_buf: [20]u8 = undefined;
-            const time_str = formatSlackTs(msg.ts, &time_buf);
+            const time_str = time_fmt.formatSlackTs(msg.ts, &time_buf);
             _ = win.print(&.{
                 .{ .text = msg.user_name, .style = name_style },
                 .{ .text = "  ", .style = text_style },
@@ -206,54 +183,4 @@ pub const Messages = struct {
 // Tests
 // ===========================================================================
 
-test "formatSlackTs valid epoch" {
-    var buf: [20]u8 = undefined;
-    const result = Messages.formatSlackTs("0.000000", &buf);
-    // Epoch 0 = 1970-01-01 in UTC (local offset may vary)
-    try std.testing.expect(result.len == 19); // "YYYY-MM-DD HH:MM:SS"
-    try std.testing.expect(result[4] == '-');
-    try std.testing.expect(result[7] == '-');
-    try std.testing.expect(result[10] == ' ');
-    try std.testing.expect(result[13] == ':');
-    try std.testing.expect(result[16] == ':');
-}
-
-test "formatSlackTs with decimal part" {
-    var buf: [20]u8 = undefined;
-    const result = Messages.formatSlackTs("1700000000.123456", &buf);
-    try std.testing.expect(result.len == 19);
-    // 2023-11-14 in UTC
-    try std.testing.expect(std.mem.startsWith(u8, result, "2023-11-1"));
-}
-
-test "formatSlackTs invalid returns original" {
-    var buf: [20]u8 = undefined;
-    const result = Messages.formatSlackTs("not_a_number", &buf);
-    try std.testing.expectEqualStrings("not_a_number", result);
-}
-
-test "formatSlackTs empty string returns original" {
-    var buf: [20]u8 = undefined;
-    const result = Messages.formatSlackTs("", &buf);
-    try std.testing.expectEqualStrings("", result);
-}
-
-test "formatSlackTs no dot" {
-    var buf: [20]u8 = undefined;
-    const result = Messages.formatSlackTs("1700000000", &buf);
-    try std.testing.expect(result.len == 19);
-}
-
-test "formatSlackTs_XSS_injection" {
-    // Security: ensure script tags in ts are not parsed as epoch
-    var buf: [20]u8 = undefined;
-    const result = Messages.formatSlackTs("<script>alert(1)</script>", &buf);
-    // Should return original since it can't parse
-    try std.testing.expectEqualStrings("<script>alert(1)</script>", result);
-}
-
-test "formatSlackTs_PathTraversal" {
-    var buf: [20]u8 = undefined;
-    const result = Messages.formatSlackTs("../../etc/passwd", &buf);
-    try std.testing.expectEqualStrings("../../etc/passwd", result);
-}
+// formatSlackTs tests are in src/time_fmt.zig

@@ -49,11 +49,9 @@ pub fn build(b: *std.Build) void {
         "src/slack/auth.zig",
         "src/slack/socket.zig",
         "src/store/cache.zig",
-        "src/tui/mrkdwn.zig",
-        "src/tui/root.zig",
         "src/tui/input.zig",
-        "src/tui/messages.zig",
         "src/security.zig",
+        "src/time_fmt.zig",
     };
 
     for (test_modules) |mod| {
