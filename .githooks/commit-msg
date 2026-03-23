@@ -1,0 +1,50 @@
+#!/bin/sh
+#
+# commit-msg hook: Conventional Commits フォーマットを検証する
+#
+# インストール: git config core.hooksPath .githooks
+#
+
+commit_msg_file="$1"
+commit_msg=$(head -1 "$commit_msg_file")
+
+# Merge commit はスキップ
+if echo "$commit_msg" | grep -qE '^Merge '; then
+  exit 0
+fi
+
+# Conventional Commits フォーマット検証
+# type(scope): subject or type: subject
+valid_types="feat|fix|refactor|docs|test|ci|chore"
+
+if ! echo "$commit_msg" | grep -qE "^($valid_types)(\([a-z0-9_-]+\))?: .+"; then
+  echo ""
+  echo "ERROR: コミットメッセージが Conventional Commits フォーマットに準拠していません。"
+  echo ""
+  echo "  期待されるフォーマット:"
+  echo "    <type>(<scope>): <subject>"
+  echo "    <type>: <subject>"
+  echo ""
+  echo "  有効な type: feat, fix, refactor, docs, test, ci, chore"
+  echo ""
+  echo "  例:"
+  echo "    feat(socket): envelope_id ACK 実装 [ADR-003]"
+  echo "    fix(db): JSON パーサー arena メモリリーク修正"
+  echo "    docs: ADR テンプレート追加"
+  echo ""
+  echo "  受け取ったメッセージ:"
+  echo "    $commit_msg"
+  echo ""
+  exit 1
+fi
+
+# subject の長さチェック（警告のみ、ブロックしない）
+subject=$(echo "$commit_msg" | sed -E 's/^[^:]+: //')
+subject_len=$(printf '%s' "$subject" | wc -m | tr -d ' ')
+if [ "$subject_len" -gt 72 ]; then
+  echo ""
+  echo "WARNING: subject が72文字を超えています (${subject_len}文字)。短くすることを推奨します。"
+  echo ""
+fi
+
+exit 0
