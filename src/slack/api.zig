@@ -91,8 +91,9 @@ pub const SlackClient = struct {
     app_token: []const u8,
     http_client: std.http.Client,
     // Track owned response bodies so they can be freed on deinit.
-    // Parsed JSON slices point into these bodies, so they must outlive the parsed values.
     owned_bodies: std.ArrayListUnmanaged([]const u8) = .{},
+    // Track JSON parse arenas for cleanup on deinit.
+    owned_arenas: std.ArrayListUnmanaged(std.heap.ArenaAllocator) = .{},
 
     /// Initialize a new SlackClient.
     ///
@@ -109,6 +110,10 @@ pub const SlackClient = struct {
     }
 
     pub fn deinit(self: *SlackClient) void {
+        for (self.owned_arenas.items) |*arena| {
+            arena.deinit();
+        }
+        self.owned_arenas.deinit(self.allocator);
         for (self.owned_bodies.items) |body| {
             self.allocator.free(body);
         }
@@ -119,6 +124,11 @@ pub const SlackClient = struct {
     /// Track a response body for cleanup on deinit.
     fn trackBody(self: *SlackClient, body: []const u8) void {
         self.owned_bodies.append(self.allocator, body) catch {};
+    }
+
+    /// Track a JSON parsed arena for cleanup on deinit.
+    fn trackParsed(self: *SlackClient, comptime T: type, parsed: std.json.Parsed(T)) void {
+        self.owned_arenas.append(self.allocator, parsed.arena.*) catch {};
     }
 
     // --- Public API methods ---
@@ -146,6 +156,7 @@ pub const SlackClient = struct {
         });
         self.trackBody(body);
         const parsed = try parseResponse(types.ConversationsListResponse, self.allocator, body);
+        self.trackParsed(types.ConversationsListResponse, parsed);
         if (parsed.value.channels) |channels| {
             return channels;
         }
@@ -161,6 +172,7 @@ pub const SlackClient = struct {
         }) catch return &.{};
         self.trackBody(body);
         const parsed = parseResponse(types.ConversationsListResponse, self.allocator, body) catch return &.{};
+        self.trackParsed(types.ConversationsListResponse, parsed);
         if (parsed.value.channels) |channels| {
             return channels;
         }
@@ -186,6 +198,7 @@ pub const SlackClient = struct {
         const body = try self.apiCall("conversations.history", self.user_token, params[0..count]);
         self.trackBody(body);
         const parsed = try parseResponse(types.ConversationsHistoryResponse, self.allocator, body);
+        self.trackParsed(types.ConversationsHistoryResponse, parsed);
         if (parsed.value.messages) |messages| {
             return messages;
         }
@@ -199,6 +212,7 @@ pub const SlackClient = struct {
         });
         self.trackBody(body);
         const parsed = try parseResponse(types.ConversationsRepliesResponse, self.allocator, body);
+        self.trackParsed(types.ConversationsRepliesResponse, parsed);
         if (parsed.value.messages) |messages| {
             return messages;
         }
@@ -251,6 +265,7 @@ pub const SlackClient = struct {
         });
         self.trackBody(body);
         const parsed = try parseResponse(types.UsersListResponse, self.allocator, body);
+        self.trackParsed(types.UsersListResponse, parsed);
         if (parsed.value.members) |members| {
             return members;
         }
@@ -269,6 +284,7 @@ pub const SlackClient = struct {
             user: ?types.User = null,
         };
         const parsed = try parseResponse(Wrapper, self.allocator, body);
+        self.trackParsed(Wrapper, parsed);
         if (parsed.value.user) |user| {
             return user;
         }
