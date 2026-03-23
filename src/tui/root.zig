@@ -38,6 +38,7 @@ pub const Root = struct {
         send_message: struct { text: []const u8, thread_ts: ?[]const u8 },
         send_also_channel: struct { text: []const u8, thread_ts: []const u8 },
         upload_file: []const u8,
+        download_file: Messages.FileInfo,
         open_thread: struct { channel_id: []const u8, thread_ts: []const u8 },
         toggle_thread,
         quit,
@@ -150,6 +151,7 @@ pub const Root = struct {
                             .channel_id = t.channel_id,
                             .thread_ts = t.thread_ts,
                         } },
+                        .download_file => |f| return .{ .download_file = f },
                         .none => return null,
                     }
                 }

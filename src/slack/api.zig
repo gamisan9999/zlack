@@ -275,6 +275,36 @@ pub const SlackClient = struct {
         return error.SlackApiError;
     }
 
+    /// Download a file from Slack using url_private with Bearer auth.
+    /// Saves to the given local path.
+    pub fn downloadFile(self: *SlackClient, url: []const u8, save_path: []const u8) !void {
+        var auth_buf: [256]u8 = undefined;
+        const auth_str = std.fmt.bufPrint(&auth_buf, "Bearer {s}", .{self.user_token}) catch return error.SlackApiError;
+
+        const heap_buf = try self.allocator.alloc(u8, 10 * 1024 * 1024); // 10MB max
+        defer self.allocator.free(heap_buf);
+        var response_writer = std.Io.Writer.fixed(heap_buf);
+
+        const result = self.http_client.fetch(.{
+            .location = .{ .url = url },
+            .method = .GET,
+            .headers = .{
+                .authorization = .{ .override = auth_str },
+                .accept_encoding = .{ .override = "identity" },
+            },
+            .response_writer = &response_writer,
+            .redirect_behavior = .init(3),
+        }) catch return error.HttpRequestFailed;
+
+        const status: u16 = @intFromEnum(result.status);
+        if (status != 200) return error.HttpRequestFailed;
+
+        const data = heap_buf[0..response_writer.end];
+        const file = std.fs.cwd().createFile(save_path, .{}) catch return error.FileWriteFailed;
+        defer file.close();
+        file.writeAll(data) catch return error.FileWriteFailed;
+    }
+
     /// Upload a file to the current channel.
     /// Uses the 3-step flow: getUploadURLExternal → PUT → completeUploadExternal.
     pub fn filesUpload(self: *SlackClient, channel_id: []const u8, file_path: []const u8) !void {

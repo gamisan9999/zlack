@@ -24,6 +24,9 @@ pub const CachedMessage = struct {
     text: []const u8,
     thread_ts: ?[]const u8,
     reply_count: u32,
+    file_name: ?[]const u8 = null,
+    file_url: ?[]const u8 = null,
+    file_size: u64 = 0,
 };
 
 // ---------------------------------------------------------------------------
@@ -189,12 +192,18 @@ pub const Cache = struct {
         else
             null;
 
+        const fn_owned: ?[]const u8 = if (msg.file_name) |fn_| self.allocator.dupe(u8, fn_) catch null else null;
+        const fu_owned: ?[]const u8 = if (msg.file_url) |fu| self.allocator.dupe(u8, fu) catch null else null;
+
         const owned = CachedMessage{
             .ts = ts_owned,
             .user_id = uid_owned,
             .text = text_owned,
             .thread_ts = tts_owned,
             .reply_count = msg.reply_count,
+            .file_name = fn_owned,
+            .file_url = fu_owned,
+            .file_size = msg.file_size,
         };
 
         gop.value_ptr.append(self.allocator, owned) catch return;
@@ -246,6 +255,8 @@ pub const Cache = struct {
                 self.allocator.free(msg.text);
                 if (msg.user_id) |uid| self.allocator.free(uid);
                 if (msg.thread_ts) |tts| self.allocator.free(tts);
+                if (msg.file_name) |fn_| self.allocator.free(fn_);
+                if (msg.file_url) |fu| self.allocator.free(fu);
             }
             list.deinit(self.allocator);
             self.allocator.free(key);
