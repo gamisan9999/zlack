@@ -261,17 +261,18 @@ pub const SocketClient = struct {
             };
 
             if (std.mem.eql(u8, event_type, "message")) {
+                // Dupe strings — parsed arena is freed after this function returns
                 self.event_queue.push(.{ .message = .{
-                    .channel_id = getStr(event_obj, "channel") orelse return,
-                    .ts = getStr(event_obj, "ts") orelse return,
-                    .user = getStr(event_obj, "user"),
-                    .text = getStr(event_obj, "text") orelse return,
-                    .thread_ts = getStr(event_obj, "thread_ts"),
+                    .channel_id = self.allocator.dupe(u8, getStr(event_obj, "channel") orelse return) catch return,
+                    .ts = self.allocator.dupe(u8, getStr(event_obj, "ts") orelse return) catch return,
+                    .user = if (getStr(event_obj, "user")) |u| self.allocator.dupe(u8, u) catch null else null,
+                    .text = self.allocator.dupe(u8, getStr(event_obj, "text") orelse return) catch return,
+                    .thread_ts = if (getStr(event_obj, "thread_ts")) |t| self.allocator.dupe(u8, t) catch null else null,
                 } });
             } else if (std.mem.eql(u8, event_type, "channel_marked")) {
                 self.event_queue.push(.{ .channel_marked = .{
-                    .channel_id = getStr(event_obj, "channel") orelse return,
-                    .ts = getStr(event_obj, "ts") orelse return,
+                    .channel_id = self.allocator.dupe(u8, getStr(event_obj, "channel") orelse return) catch return,
+                    .ts = self.allocator.dupe(u8, getStr(event_obj, "ts") orelse return) catch return,
                 } });
             }
         }
