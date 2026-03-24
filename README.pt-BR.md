@@ -45,8 +45,14 @@ Inicialização instantânea. Binário único. Sem Electron.
 ### Configurações do Slack App
 
 - **Socket Mode**: Habilitado
-- **Event Subscriptions**: `message.channels`, `message.groups`, `message.im`
+- **Event Subscriptions**: Enable Events = ON
+  - **Subscribe to events on behalf of users**: `message.channels`, `message.groups`, `message.im`
+  - **Subscribe to bot events**: `message.channels`, `message.groups`, `message.im`
 - **App-Level Token**: Com escopo `connections:write`
+
+> **Importante**: O zlack usa User Token (`xoxp-`), então os eventos devem ser registrados em
+> **"Subscribe to events on behalf of users"**, não apenas em "Subscribe to bot events".
+> Sem isso, o Socket Mode conectará mas não entregará mensagens em tempo real.
 
 ## Build
 
@@ -92,6 +98,19 @@ Os tokens são salvos no macOS Keychain após a primeira autenticação bem-suce
 ```bash
 ./zig-out/bin/zlack --reconfigure
 ```
+
+## Modo Tail
+
+Imprime mensagens em tempo real no stdout sem TUI. Funciona com pipes.
+
+```bash
+./zig-out/bin/zlack --tail general                    # Canal único
+./zig-out/bin/zlack --tail general,random              # Múltiplos canais
+./zig-out/bin/zlack --tail john.doe           # DM (nome de login)
+./zig-out/bin/zlack --tail general --tail-dir /tmp/    # Logs por canal
+```
+
+Mostra as últimas 10 mensagens na inicialização, depois transmite novas mensagens. Ctrl+C para parar.
 
 ## Atalhos de teclado
 

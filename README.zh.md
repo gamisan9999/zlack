@@ -45,8 +45,12 @@
 ### Slack App 设置
 
 - **Socket Mode**: 启用
-- **Event Subscriptions**: `message.channels`, `message.groups`, `message.im`
+- **Event Subscriptions**: Enable Events = ON
+  - **Subscribe to events on behalf of users**: `message.channels`, `message.groups`, `message.im`
+  - **Subscribe to bot events**: `message.channels`, `message.groups`, `message.im`
 - **App-Level Token**: 需要 `connections:write` 权限
+
+> **重要**: zlack 使用 User Token (`xoxp-`)，因此必须在 **"Subscribe to events on behalf of users"** 中注册事件。仅注册 Bot events 将无法通过 Socket Mode 接收实时消息。
 
 ## 构建
 
@@ -92,6 +96,19 @@ ZLACK_USER_TOKEN=xoxp-... ZLACK_APP_TOKEN=xapp-... ./zig-out/bin/zlack
 ```bash
 ./zig-out/bin/zlack --reconfigure
 ```
+
+## Tail 模式
+
+无需 TUI，将实时消息输出到 stdout。支持管道。
+
+```bash
+./zig-out/bin/zlack --tail general                    # 单个频道
+./zig-out/bin/zlack --tail general,random              # 多个频道
+./zig-out/bin/zlack --tail john.doe           # 私信（登录名）
+./zig-out/bin/zlack --tail general --tail-dir /tmp/    # 按频道保存日志
+```
+
+启动时显示最近 10 条消息，然后实时输出新消息。Ctrl+C 停止。
 
 ## 快捷键
 

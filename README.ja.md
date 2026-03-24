@@ -45,8 +45,12 @@
 ### Slack App の設定
 
 - **Socket Mode**: 有効化
-- **Event Subscriptions**: `message.channels`, `message.groups`, `message.im`
+- **Event Subscriptions**: Enable Events = ON
+  - **Subscribe to events on behalf of users**: `message.channels`, `message.groups`, `message.im`
+  - **Subscribe to bot events**: `message.channels`, `message.groups`, `message.im`
 - **App-Level Token**: `connections:write` スコープ付き
+
+> **重要**: zlack は User Token (`xoxp-`) を使うため、**「Subscribe to events on behalf of users」** にイベントを登録する必要があります。Bot events だけでは Socket Mode でリアルタイムメッセージが配信されません。
 
 ## ビルド
 
@@ -92,6 +96,26 @@ ZLACK_USER_TOKEN=xoxp-... ZLACK_APP_TOKEN=xapp-... ./zig-out/bin/zlack
 ```bash
 ./zig-out/bin/zlack --reconfigure
 ```
+
+## Tail モード
+
+TUI を起動せず、リアルタイムメッセージを stdout に出力。パイプ利用可能。
+
+```bash
+# 単一チャンネル
+./zig-out/bin/zlack --tail general
+
+# 複数チャンネル（カンマ区切り）
+./zig-out/bin/zlack --tail general,random
+
+# DM（ログイン名で指定）
+./zig-out/bin/zlack --tail john.doe
+
+# チャンネル別ログファイル
+./zig-out/bin/zlack --tail general,random --tail-dir /tmp/logs/
+```
+
+起動時に直近10件を表示し、新着メッセージをリアルタイムで出力。Ctrl+C で停止。
 
 ## キーバインド
 

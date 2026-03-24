@@ -45,8 +45,14 @@ English | [日本語](README.ja.md) | [简体中文](README.zh.md) | [Português
 ### Required Slack App Settings
 
 - **Socket Mode**: Enabled
-- **Event Subscriptions**: `message.channels`, `message.groups`, `message.im`
+- **Event Subscriptions**: Enable Events = ON
+  - **Subscribe to events on behalf of users**: `message.channels`, `message.groups`, `message.im`
+  - **Subscribe to bot events**: `message.channels`, `message.groups`, `message.im`
 - **App-Level Token**: With `connections:write` scope
+
+> **Important**: Since zlack uses a User Token (`xoxp-`), events must be registered under
+> **"Subscribe to events on behalf of users"**, not just "Subscribe to bot events".
+> Without this, Socket Mode will connect but no real-time messages will be delivered.
 
 ## Build
 
@@ -92,6 +98,29 @@ Tokens are saved to macOS Keychain on first successful auth.
 ```bash
 ./zig-out/bin/zlack --reconfigure
 ```
+
+## Tail Mode
+
+Print real-time messages to stdout without TUI. Works with pipes.
+
+```bash
+# Single channel
+./zig-out/bin/zlack --tail general
+
+# Multiple channels (comma-separated)
+./zig-out/bin/zlack --tail general,random
+
+# DM by login name
+./zig-out/bin/zlack --tail john.doe
+
+# Per-channel log files
+./zig-out/bin/zlack --tail general,random --tail-dir /tmp/logs/
+
+# Pipe to grep
+./zig-out/bin/zlack --tail general | grep deploy
+```
+
+Shows last 10 messages on startup, then streams new messages. Ctrl+C to stop.
 
 ## Keybindings
 
